@@ -1,0 +1,13 @@
+services:
+  argus:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ARGUS_DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+    init: true

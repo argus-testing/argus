@@ -1,0 +1,1 @@
+"""Argus visual testing core."""
