@@ -1,21 +1,47 @@
-MIT License
+Argus Source-Available License 1.0 (ASAL-1.0)
 
-Copyright (c) 2026 Argus contributors
+Copyright (c) 2026 Argus Contributors
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+1. Grant of License
+Subject to the terms and conditions of this License, the Licensor hereby grants
+you a non-exclusive, worldwide, royalty-free copyright license to use, copy,
+modify, create derivative works of, and distribute the Software, subject to the
+conditions and limitations set forth below.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+2. Permitted Free Use
+You may exercise the rights granted in Section 1 free of charge if:
+(a) You are an individual using the Software for personal, educational, or
+    commercial projects; or
+(b) You are an organization (including its affiliates) with fewer than 100
+    total employees and contractors.
 
+3. Enterprise License Requirement
+If you are an organization (including its affiliates) with 100 or more employees
+and contractors, any use of the Software requires a commercial license from the
+Licensor.
+
+To obtain an enterprise license, contact: licensing@argustest.com
+
+4. Hosted Service Limitation
+You may not provide the Software to third parties as a hosted, managed, or
+software-as-a-service (SaaS) visual UI testing product or service that competes
+directly with the Licensor's hosted offerings without prior written permission.
+
+5. Conversion to Open Source
+Effective three (3) years from the date of the first public release of this
+version of the Software (or on January 1, 2029, whichever is earlier), the terms
+of this License shall be replaced in their entirety by the MIT License, and you
+may use this version of the Software under the terms of the MIT License.
+
+6. Attribution and Notices
+All copies or substantial portions of the Software, including modified versions,
+must include this copyright notice, this License, and the disclaimer below.
+
+7. Disclaimer of Warranty & Limitation of Liability
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM,
+OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
