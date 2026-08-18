@@ -65,7 +65,7 @@ Argus runs this like a person would — clicking through the flow, reading the p
 
 ## Run it yourself
 
-Argus is also open source and fully local-first — SQLite storage, no telemetry, your data and screenshots never leave your machine. Prefer to self-host? Follow the steps below.
+Argus is source-available and fully local-first — SQLite storage, no telemetry, your data and screenshots never leave your machine. Prefer to self-host? Follow the steps below.
 
 ### Requirements
 
@@ -129,4 +129,8 @@ API docs are available at `/docs`. All data is local; there is no authentication
 
 ## License
 
-MIT
+Argus is source-available under the [Argus Source-Available License 1.0 (ASAL-1.0)](LICENSE).
+
+- **Individuals & Small Teams (< 100 members):** Free to use, modify, and self-host for both commercial and non-commercial purposes.
+- **Enterprises (100+ members):** Requires a commercial license. Contact us at [licensing@argustest.com](mailto:licensing@argustest.com) to get set up.
+- Releases automatically convert to the **MIT License** after 3 years.
