@@ -20,16 +20,6 @@ The fastest way to run Argus: no install, no API keys to manage, nothing to self
 
 Get started at [argustest.com](https://argustest.com/).
 
-## Inside Argus
-
-![Describing a test](./frontend/public/auto-test.png)
-
-![A run in progress](./frontend/public/running.png)
-
-![A completed run report](./frontend/public/completed.png)
-
-![Integrations](./frontend/public/integrations.png)
-
 ## Multi-agent pipeline
 
 A run isn't a single model call — it's five agents handing off to each other, and you can watch each one work in the live run view:
@@ -41,6 +31,16 @@ A run isn't a single model call — it's five agents handing off to each other, 
 5. **Executor** — runs the plan in a real browser: navigating, typing, clicking, and confirming outcomes as it goes.
 
 Nothing happens in a black box — each agent streams its reasoning as it works, down to individual actions like "Navigating to /companies" or "Confirming 'Airbnb' is on the page," so you see the app get mapped, the plan get built, and the test get executed, live.
+
+## Inside Argus
+
+![Describing a test](./frontend/public/auto-test.png)
+
+![A run in progress](./frontend/public/running.png)
+
+![A completed run report](./frontend/public/completed.png)
+
+![Integrations](./frontend/public/integrations.png)
 
 ## Example
 
