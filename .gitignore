@@ -12,7 +12,7 @@ dist/
 .pyright/
 .pi-subagents/
 .superpowers/
-data/
 frontend/node_modules/
 frontend/dist/
 *.tsbuildinfo
+data
