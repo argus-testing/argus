@@ -2,6 +2,15 @@
 
 Argus is a local, open-source visual UI testing app. Describe a test, point it at an HTTP(S) page, and watch an agent inspect the page in an isolated Playwright browser context. Runs, timelines, screenshot references, and structured reports stay in local SQLite storage.
 
+> **Argus finds the bugs you didn't write tests for.** Point it at a page, describe what "working" looks like, and an autonomous agent explores your UI the way a real user would — clicking, typing, scrolling — then hands you a structured report with screenshots and a timeline. No test scripts to maintain, no flaky selectors to babysit.
+
+- **Agentic, not scripted** — the agent reasons about the page and adapts, it doesn't replay a fixed script
+- **Local-first** — SQLite storage, no telemetry, your data and screenshots never leave your machine
+- **Fits your stack** — built on Playwright, works against localhost and private-network apps
+- **Zero setup ceremony** — one env var and you're running real browser tests in minutes
+
+Learn more at [argustest.com](https://argustest.com/). If this saves you from writing another brittle E2E test, a star on the repo helps other people find it.
+
 ## Requirements
 
 - Python 3.11+, [`uv`](https://docs.astral.sh/uv/), and Node.js 20.19+ or 22.12+
