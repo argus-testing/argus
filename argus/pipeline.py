@@ -5,6 +5,14 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 
+from argus.agents import (
+    build_comprehender_agent,
+    build_critic_agent,
+    build_executor_agent,
+    build_explorer_agent,
+    build_strategist_agent,
+    build_validator_agent,
+)
 from argus.runtime.events import CompletedEvent, ToolCallEvent, ToolResultEvent
 from argus.runtime.messages import ImagePart, Message, MessageRole, TextPart
 from argus.runtime.models import AgentSpec, ModelRef
@@ -142,17 +150,33 @@ class RunExecutor:
             providers={"gemini": provider}, sessions=InMemorySessionStore()
         )
         model = ModelRef(provider="gemini", model=self.settings.gemini_model)
-        plan = await self._complete(
+
+        # 1. Validator stage
+        validator_agent = build_validator_agent(model)
+        validator_output = await self._complete(
             runtime,
-            AgentSpec(
-                name="planner",
-                model=model,
-                instruction="Plan a concise visual UI test. Return plain text steps. Never request or enter credentials.",
-            ),
+            validator_agent,
             f"Target: {run['url']}\nGoal: {run['instructions']}",
-            f"{run_id}:plan",
+            f"{run_id}:validator",
         )
-        await self.emit(run_id, "plan.completed", {"plan": plan})
+        testable, validator_reason = self._parse_validator_output(validator_output)
+        if not testable:
+            return {
+                "verdict": "inconclusive",
+                "summary": f"Request not testable: {validator_reason or 'The request was identified as non-testable or off-topic.'}",
+                "findings": [],
+                "recommendations": ["Provide a specific test description or URL to test."],
+                "plan": "Validation failed — request is not testable",
+            }
+
+        # 2. Comprehender stage
+        comprehender_agent = build_comprehender_agent(model)
+        test_brief = await self._complete(
+            runtime,
+            comprehender_agent,
+            f"Target: {run['url']}\nGoal: {run['instructions']}",
+            f"{run_id}:comprehender",
+        )
 
         async with (
             async_playwright() as playwright,
@@ -203,88 +227,135 @@ class RunExecutor:
                 )
                 return {"path": path, "label": label}
 
-            agent = AgentSpec(
-                name="browser",
-                model=model,
-                instruction=(
-                    "Execute the supplied visual test plan with the browser tools. Inspect before acting, "
-                    "capture evidence, do not enter credentials or destructive data, and summarize observations."
-                ),
-                tools=tuple(
-                    Tool.from_callable(tool)
-                    for tool in (inspect_page, click, type_text, navigate, screenshot)
-                ),
+            browser_tools = tuple(
+                Tool.from_callable(tool)
+                for tool in (inspect_page, click, type_text, navigate, screenshot)
             )
-            message = Message(
+
+            # 3. Explorer stage
+            explorer_agent = build_explorer_agent(model, browser_tools)
+            explorer_msg = Message(
                 role=MessageRole.USER,
                 parts=(
                     TextPart(
-                        text=f"Target: {run['url']}\nGoal: {run['instructions']}\nPlan:\n{plan}"
+                        text=f"Target: {run['url']}\nGoal: {run['instructions']}\nTest Brief:\n{test_brief}"
                     ),
                     ImagePart(data=initial_bytes, media_type="image/png"),
                 ),
             )
-            observations = ""
-            async for event in runtime.run(
-                agent, session_id=f"{run_id}:browser", message=message
-            ):
-                if isinstance(event, ToolCallEvent):
-                    await self.emit(
-                        run_id,
-                        "browser.action",
-                        {
-                            "tool": event.call.name,
-                            "arguments": _tool_event_arguments(
-                                event.call.name, event.call.arguments
-                            ),
-                        },
-                    )
-                elif isinstance(event, ToolResultEvent):
-                    await self.emit(
-                        run_id,
-                        "browser.observation",
-                        {
-                            "tool": event.result.name,
-                            "result": _persisted_tool_result(
-                                event.result.name, event.result.result
-                            ),
-                        },
-                    )
-                elif isinstance(event, CompletedEvent):
-                    observations = "".join(
-                        part.text
-                        for part in event.message.parts
-                        if isinstance(part, TextPart)
-                    )
+            app_map = await self._run_agent_with_events(
+                runtime, explorer_agent, explorer_msg, f"{run_id}:explorer", run_id
+            )
+
+            # 4. Strategist stage
+            strategist_agent = build_strategist_agent(model)
+            plan = await self._complete(
+                runtime,
+                strategist_agent,
+                f"Target: {run['url']}\nGoal: {run['instructions']}\nTest Brief:\n{test_brief}\nApp Map:\n{app_map}",
+                f"{run_id}:strategist",
+            )
+            await self.emit(run_id, "plan.completed", {"plan": plan})
+
+            # 5. Executor stage
+            executor_agent = build_executor_agent(model, browser_tools)
+            _, current_bytes = await self._capture(run_id, page, "pre-execution")
+            executor_msg = Message(
+                role=MessageRole.USER,
+                parts=(
+                    TextPart(
+                        text=f"Target: {run['url']}\nGoal: {run['instructions']}\nPlan:\n{plan}\nApp Map:\n{app_map}"
+                    ),
+                    ImagePart(data=current_bytes, media_type="image/png"),
+                ),
+            )
+            execution_results = await self._run_agent_with_events(
+                runtime, executor_agent, executor_msg, f"{run_id}:executor", run_id
+            )
+
+            # 6. Critic stage
+            critic_tools = tuple(
+                Tool.from_callable(tool)
+                for tool in (inspect_page, screenshot)
+            )
+            critic_agent = build_critic_agent(model, critic_tools)
             final_path, final_bytes = await self._capture(run_id, page, "final")
             await self.emit(
                 run_id,
                 "browser.screenshot",
                 {"path": final_path, "label": "Final page"},
             )
-
-        report_text = await self._complete_message(
-            runtime,
-            AgentSpec(
-                name="reporter",
-                model=model,
-                instruction=(
-                    "Return only JSON with keys verdict (passed, failed, or inconclusive), summary, "
-                    "findings (array of objects with severity, title, detail), and recommendations (array of strings)."
-                ),
-            ),
-            Message(
+            critic_msg = Message(
                 role=MessageRole.USER,
                 parts=(
                     TextPart(
-                        text=f"Goal: {run['instructions']}\nPlan: {plan}\nObservations: {observations}"
+                        text=(
+                            f"Original User Request: {run['instructions']}\n"
+                            f"Test Brief: {test_brief}\n"
+                            f"App Map: {app_map}\n"
+                            f"Test Plan: {plan}\n"
+                            f"Executor Results: {execution_results}"
+                        )
                     ),
                     ImagePart(data=final_bytes, media_type="image/png"),
                 ),
-            ),
-            f"{run_id}:report",
-        )
-        return self._report(report_text, plan, observations)
+            )
+            verdict_text = await self._run_agent_with_events(
+                runtime, critic_agent, critic_msg, f"{run_id}:critic", run_id
+            )
+
+        return self._report(verdict_text, plan, execution_results)
+
+    async def _run_agent_with_events(
+        self,
+        runtime: AgentRuntime,
+        agent: AgentSpec,
+        message: Message,
+        session_id: str,
+        run_id: str,
+    ) -> str:
+        output = ""
+        async for event in runtime.run(agent, session_id=session_id, message=message):
+            if isinstance(event, ToolCallEvent):
+                await self.emit(
+                    run_id,
+                    "browser.action",
+                    {
+                        "tool": event.call.name,
+                        "arguments": _tool_event_arguments(
+                            event.call.name, event.call.arguments
+                        ),
+                    },
+                )
+            elif isinstance(event, ToolResultEvent):
+                await self.emit(
+                    run_id,
+                    "browser.observation",
+                    {
+                        "tool": event.result.name,
+                        "result": _persisted_tool_result(
+                            event.result.name, event.result.result
+                        ),
+                    },
+                )
+            elif isinstance(event, CompletedEvent):
+                output = "".join(
+                    part.text
+                    for part in event.message.parts
+                    if isinstance(part, TextPart)
+                )
+        return output
+
+    @staticmethod
+    def _parse_validator_output(text: str) -> tuple[bool, str]:
+        try:
+            cleaned = text.strip().removeprefix("```json").removesuffix("```").strip()
+            data = json.loads(cleaned)
+            if isinstance(data, dict):
+                return bool(data.get("testable", True)), str(data.get("reason", ""))
+        except (json.JSONDecodeError, ValueError, TypeError):
+            return True, ""
+        return True, ""
 
     async def _capture(self, run_id: str, page: Any, label: str) -> tuple[str, bytes]:
         directory = self.settings.data_dir / "screenshots" / run_id
