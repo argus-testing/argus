@@ -19,11 +19,12 @@ import (
 const maxReportText = 4000
 
 type browserAdapter struct {
-	runner  *Runner
-	runID   string
-	session browser.Session
-	policy  *policy.Policy
-	secrets *secretSet
+	runner         *Runner
+	runID          string
+	session        browser.Session
+	policy         *policy.Policy
+	secrets        *secretSet
+	groundingCalls int
 }
 
 func (a *browserAdapter) inspect(ctx context.Context, _ map[string]any, _ agent.ToolContext) (any, error) {
@@ -219,6 +220,79 @@ func (a *browserAdapter) networkErrors(ctx context.Context, _ map[string]any, _ 
 	}
 	return map[string]any{"errors": values}, nil
 }
+func (a *browserAdapter) findElements(ctx context.Context, values map[string]any, _ agent.ToolContext) (any, error) {
+	description, err := requiredString(values, "description", 500)
+	if err != nil {
+		return nil, err
+	}
+	limit := 5
+	if raw, ok := values["limit"]; ok {
+		limit, err = integer(raw)
+		if err != nil || limit < 1 || limit > 10 {
+			return nil, errors.New("invalid limit")
+		}
+	}
+	snapshot, capture, matches, err := a.ground(ctx, description, limit, "Visual search")
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]any{
+		"matches": matches, "width": snapshot.Width, "height": snapshot.Height,
+		"path": capture.result["path"],
+	}
+	return agent.ToolOutput{
+		Result: result,
+		Followup: []agent.MessagePart{
+			{Text: &agent.TextPart{Text: "Fresh viewport screenshot used for the visual matches."}},
+			{Image: &agent.ImagePart{Data: capture.data, MediaType: "image/png"}},
+		},
+	}, nil
+}
+func (a *browserAdapter) visualClick(ctx context.Context, values map[string]any, _ agent.ToolContext) (any, error) {
+	description, err := requiredString(values, "description", 500)
+	if err != nil {
+		return nil, err
+	}
+	_, _, matches, err := a.ground(ctx, description, 1, "Visual click target")
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) != 1 {
+		return nil, errors.New("visual target was not found")
+	}
+	match := matches[0]
+	element, err := a.session.ElementAt(ctx, match.X, match.Y)
+	if err != nil {
+		return nil, fmt.Errorf("browser: %w", err)
+	}
+	if a.policy != nil {
+		if err := a.policy.CheckAction(policy.Action{Kind: policy.ActionClick, Mutating: element.Mutating, Destructive: element.Destructive}); err != nil {
+			return nil, err
+		}
+	}
+	clicked, err := a.session.ClickPoint(ctx, match.X, match.Y)
+	if err != nil {
+		return nil, fmt.Errorf("browser: %w", err)
+	}
+	observation, err := a.afterAction(ctx, "visually clicked", clicked)
+	if err != nil {
+		return nil, err
+	}
+	evidence, err := a.captureViewport(ctx, "After visual click", true)
+	if err != nil {
+		return nil, err
+	}
+	result, _ := observation.(map[string]any)
+	result["match"] = match
+	result["path"] = evidence.result["path"]
+	return agent.ToolOutput{
+		Result: result,
+		Followup: []agent.MessagePart{
+			{Text: &agent.TextPart{Text: "Fresh viewport screenshot after the visual click."}},
+			{Image: &agent.ImagePart{Data: evidence.data, MediaType: "image/png"}},
+		},
+	}, nil
+}
 func (a *browserAdapter) navigate(ctx context.Context, values map[string]any, _ agent.ToolContext) (any, error) {
 	target, err := requiredString(values, "url", 2000)
 	if err != nil {
@@ -372,11 +446,24 @@ type screenshotCapture struct {
 }
 
 func (a *browserAdapter) capture(ctx context.Context, label string, emitEvent bool) (screenshotCapture, error) {
+	return a.captureMode(ctx, label, emitEvent, false)
+}
+
+func (a *browserAdapter) captureViewport(ctx context.Context, label string, emitEvent bool) (screenshotCapture, error) {
+	return a.captureMode(ctx, label, emitEvent, true)
+}
+
+func (a *browserAdapter) captureMode(ctx context.Context, label string, emitEvent, viewportOnly bool) (screenshotCapture, error) {
 	publicPath, diskPath, err := NextScreenshotPath(a.runner.screenshotDir, a.runID, label)
 	if err != nil {
 		return screenshotCapture{}, fmt.Errorf("browser: %w", err)
 	}
-	if err := a.session.Screenshot(ctx, diskPath); err != nil {
+	if viewportOnly {
+		err = a.session.ScreenshotViewport(ctx, diskPath)
+	} else {
+		err = a.session.Screenshot(ctx, diskPath)
+	}
+	if err != nil {
 		return screenshotCapture{}, fmt.Errorf("browser: %w", err)
 	}
 	data, err := os.ReadFile(diskPath)
@@ -393,6 +480,38 @@ func (a *browserAdapter) capture(ctx context.Context, label string, emitEvent bo
 		}
 	}
 	return screenshotCapture{result: result, data: data}, nil
+}
+
+func (a *browserAdapter) ground(ctx context.Context, description string, limit int, label string) (browser.PageSnapshot, screenshotCapture, []VisualMatch, error) {
+	if a.runner == nil || a.runner.grounder == nil {
+		return browser.PageSnapshot{}, screenshotCapture{}, nil, errors.New("visual grounding is not configured")
+	}
+	if a.groundingCalls >= 12 {
+		return browser.PageSnapshot{}, screenshotCapture{}, nil, errors.New("visual grounding call limit exceeded")
+	}
+	a.groundingCalls++
+	snapshot, err := a.session.Inspect(ctx)
+	if err != nil {
+		return browser.PageSnapshot{}, screenshotCapture{}, nil, fmt.Errorf("browser: %w", err)
+	}
+	if snapshot.Width <= 0 || snapshot.Height <= 0 {
+		return browser.PageSnapshot{}, screenshotCapture{}, nil, errors.New("browser viewport is unavailable")
+	}
+	capture, err := a.captureViewport(ctx, label, true)
+	if err != nil {
+		return browser.PageSnapshot{}, screenshotCapture{}, nil, err
+	}
+	matches, err := a.runner.grounder.Locate(ctx, GroundingRequest{
+		Description: description, Image: capture.data, Width: snapshot.Width, Height: snapshot.Height, Limit: limit,
+	})
+	if err != nil {
+		return browser.PageSnapshot{}, screenshotCapture{}, nil, fmt.Errorf("visual grounding: %w", err)
+	}
+	matches, err = validateMatches(matches, snapshot.Width, snapshot.Height, .70, limit)
+	if err != nil {
+		return browser.PageSnapshot{}, screenshotCapture{}, nil, err
+	}
+	return snapshot, capture, matches, nil
 }
 
 func requiredString(values map[string]any, name string, maximum int) (string, error) {

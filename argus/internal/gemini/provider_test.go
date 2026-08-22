@@ -82,6 +82,42 @@ func TestStreamNormalizesStringMapToolResponse(t *testing.T) {
 	}
 }
 
+func TestLocateSendsBoundedMultimodalJSONRequest(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		config, _ := payload["generationConfig"].(map[string]any)
+		if config["responseMimeType"] != "application/json" {
+			t.Fatalf("generation config = %#v", config)
+		}
+		contents := payload["contents"].([]any)
+		parts := contents[0].(map[string]any)["parts"].([]any)
+		inline := parts[1].(map[string]any)["inlineData"].(map[string]any)
+		if inline["mimeType"] != "image/png" || inline["data"] != "cG5n" {
+			t.Fatalf("inline image = %#v", inline)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"matches\\\":[{\\\"x\\\":25,\\\"y\\\":30,\\\"confidence\\\":0.94,\\\"description\\\":\\\"Search button\\\"}]}\"}]}}]}\n\n"))
+	}))
+	defer server.Close()
+
+	provider := gemini.New("key", gemini.WithBaseURL(server.URL), gemini.WithHTTPClient(server.Client()))
+	matches, err := provider.Locate(context.Background(), gemini.GroundingRequest{
+		Model: "gemini-test", Description: "Search button", Image: []byte("png"),
+		Width: 800, Height: 600, Limit: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []gemini.VisualMatch{{X: 25, Y: 30, Confidence: .94, Description: "Search button"}}
+	if !reflect.DeepEqual(matches, want) {
+		t.Fatalf("matches = %#v, want %#v", matches, want)
+	}
+}
+
 func TestStreamRateLimitAndInvalidFinalResponse(t *testing.T) {
 	t.Parallel()
 	for name, handler := range map[string]http.HandlerFunc{

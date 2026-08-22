@@ -27,11 +27,18 @@ func spec(name, instruction string, model agent.ModelRef, tools []agent.Tool, js
 func browserTools(adapter *browserAdapter, includeActions bool) []agent.Tool {
 	inspect := agent.Tool{Name: "inspect_page", Description: "Inspect the current page URL, title, visible text, and interactive elements.", InputSchema: schema(`{"type":"object","properties":{},"additionalProperties":false}`), Invoke: adapter.inspect}
 	screenshot := agent.Tool{Name: "screenshot", Description: "Capture a screenshot for evidence. Use after significant actions.", InputSchema: schema(`{"type":"object","properties":{"label":{"type":"string","maxLength":80}},"additionalProperties":false}`), Invoke: adapter.screenshot}
-	if !includeActions {
-		return []agent.Tool{inspect, screenshot}
+	tools := []agent.Tool{inspect}
+	groundingAvailable := adapter != nil && adapter.runner != nil && adapter.runner.grounder != nil
+	if groundingAvailable {
+		tools = append(tools, agent.Tool{Name: "find_elements", Description: "Locate visible UI targets in a fresh viewport screenshot.", InputSchema: schema(`{"type":"object","properties":{"description":{"type":"string","minLength":1,"maxLength":500},"limit":{"type":"integer","minimum":1,"maximum":10}},"required":["description"],"additionalProperties":false}`), Invoke: adapter.findElements})
 	}
-	return []agent.Tool{
-		inspect,
+	if !includeActions {
+		return append(tools, screenshot)
+	}
+	if groundingAvailable {
+		tools = append(tools, agent.Tool{Name: "visual_click", Description: "Locate a target in a fresh screenshot, enforce policy on the DOM element at that point, and click it.", InputSchema: schema(`{"type":"object","properties":{"description":{"type":"string","minLength":1,"maxLength":500}},"required":["description"],"additionalProperties":false}`), Invoke: adapter.visualClick})
+	}
+	return append(tools, []agent.Tool{
 		{Name: "click", Description: "Click one inspected element by its current reference.", InputSchema: schema(`{"type":"object","properties":{"ref":{"type":"string","minLength":1,"maxLength":100}},"required":["ref"],"additionalProperties":false}`), Invoke: adapter.click},
 		{Name: "type_text", Description: "Replace an inspected field value with plain text or a named ephemeral secret binding.", InputSchema: schema(`{"type":"object","properties":{"ref":{"type":"string","minLength":1,"maxLength":100},"text":{"type":"string","maxLength":4096},"secret":{"type":"string","pattern":"^[A-Za-z_][A-Za-z0-9_.-]{0,99}$"}},"required":["ref"],"oneOf":[{"required":["text"],"not":{"required":["secret"]}},{"required":["secret"],"not":{"required":["text"]}}],"additionalProperties":false}`), Invoke: adapter.typeText},
 		{Name: "fill_form", Description: "Fill up to 20 inspected fields using plain text or named ephemeral secret bindings.", InputSchema: schema(`{"type":"object","properties":{"fields":{"type":"array","minItems":1,"maxItems":20,"items":{"type":"object","properties":{"ref":{"type":"string","minLength":1,"maxLength":100},"text":{"type":"string","maxLength":4096},"secret":{"type":"string","pattern":"^[A-Za-z_][A-Za-z0-9_.-]{0,99}$"}},"required":["ref"],"oneOf":[{"required":["text"],"not":{"required":["secret"]}},{"required":["secret"],"not":{"required":["text"]}}],"additionalProperties":false}}},"required":["fields"],"additionalProperties":false}`), Invoke: adapter.fillForm},
@@ -45,7 +52,7 @@ func browserTools(adapter *browserAdapter, includeActions bool) []agent.Tool {
 		{Name: "network_errors", Description: "Return bounded failed and HTTP error requests without headers or bodies.", InputSchema: schema(`{"type":"object","properties":{},"additionalProperties":false}`), Invoke: adapter.networkErrors},
 		{Name: "navigate", Description: "Navigate to an HTTP(S) URL without credentials.", InputSchema: schema(`{"type":"object","properties":{"url":{"type":"string","minLength":1,"maxLength":2000}},"required":["url"],"additionalProperties":false}`), Invoke: adapter.navigate},
 		screenshot,
-	}
+	}...)
 }
 
 func schema(value string) json.RawMessage { return json.RawMessage(value) }

@@ -63,6 +63,19 @@ func FormatObservation(tool string, result any) map[string]any {
 			persisted["url"] = server.SanitizeURL(url)
 		}
 		persisted["action"] = boundedString(values["action"], 80)
+	case "visual_click":
+		if url, ok := values["url"].(string); ok {
+			persisted["url"] = server.SanitizeURL(url)
+		}
+		persisted["action"] = boundedString(values["action"], 80)
+		persisted["path"] = boundedString(values["path"], 500)
+	case "find_elements":
+		persisted["path"] = boundedString(values["path"], 500)
+		persisted["width"] = values["width"]
+		persisted["height"] = values["height"]
+		if matches, ok := values["matches"].([]any); ok {
+			persisted["match_count"] = min(len(matches), 10)
+		}
 	case "screenshot":
 		persisted["path"] = boundedString(values["path"], 500)
 		persisted["label"] = boundedString(values["label"], 80)

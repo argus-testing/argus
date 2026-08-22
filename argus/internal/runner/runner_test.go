@@ -53,6 +53,10 @@ type fakeSession struct {
 	typedValue      string
 	typedSensitive  bool
 	inspectText     string
+	pointElement    browser.Element
+	pointClicks     int
+	inspectWidth    int
+	inspectHeight   int
 }
 
 func (s *fakeSession) Navigate(_ context.Context, url string) (browser.Navigation, error) {
@@ -65,7 +69,14 @@ func (s *fakeSession) Inspect(context.Context) (browser.PageSnapshot, error) {
 	if text == "" {
 		text = "private page text"
 	}
-	return browser.PageSnapshot{URL: "https://example.com", Title: "Secret title", Text: text, Elements: []browser.Element{{Ref: "e1-1", Name: "private button"}}}, nil
+	width, height := s.inspectWidth, s.inspectHeight
+	if width == 0 {
+		width = 800
+	}
+	if height == 0 {
+		height = 600
+	}
+	return browser.PageSnapshot{URL: "https://example.com", Title: "Secret title", Text: text, Width: width, Height: height, Elements: []browser.Element{{Ref: "e1-1", Name: "private button"}}}, nil
 }
 func (s *fakeSession) Element(_ context.Context, reference string) (browser.Element, error) {
 	if element, ok := s.elements[reference]; ok {
@@ -73,6 +84,9 @@ func (s *fakeSession) Element(_ context.Context, reference string) (browser.Elem
 		return element, nil
 	}
 	return browser.Element{Ref: reference}, nil
+}
+func (s *fakeSession) ElementAt(context.Context, int, int) (browser.Element, error) {
+	return s.pointElement, nil
 }
 func (s *fakeSession) Click(context.Context, string) (browser.ActionResult, error) {
 	s.calls = append(s.calls, "click")
@@ -121,6 +135,11 @@ func (s *fakeSession) NetworkErrors(context.Context) ([]browser.NetworkError, er
 	s.calls = append(s.calls, "network")
 	return []browser.NetworkError{{Method: "GET", URL: "https://example.com/missing", Status: 404}}, nil
 }
+func (s *fakeSession) ClickPoint(context.Context, int, int) (browser.ActionResult, error) {
+	s.calls = append(s.calls, "click_point")
+	s.pointClicks++
+	return browser.ActionResult{URL: "https://example.com"}, nil
+}
 func (s *fakeSession) Screenshot(_ context.Context, path string) error {
 	s.calls = append(s.calls, "screenshot")
 	s.screenshotPath = path
@@ -133,6 +152,9 @@ func (s *fakeSession) Screenshot(_ context.Context, path string) error {
 	}
 	s.screenshotCount++
 	return os.WriteFile(path, data, 0o644)
+}
+func (s *fakeSession) ScreenshotViewport(ctx context.Context, path string) error {
+	return s.Screenshot(ctx, path)
 }
 func (s *fakeSession) Close() error { s.closed++; return nil }
 

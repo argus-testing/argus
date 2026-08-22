@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ace-foundry/argus-testing/argus/internal/agent"
 )
@@ -22,6 +23,23 @@ import (
 const defaultBaseURL = "https://generativelanguage.googleapis.com"
 
 var ErrInvalidResponse = errors.New("invalid Gemini response")
+var ErrInvalidGroundingRequest = errors.New("invalid Gemini grounding request")
+
+type GroundingRequest struct {
+	Model       string
+	Description string
+	Image       []byte
+	Width       int
+	Height      int
+	Limit       int
+}
+
+type VisualMatch struct {
+	X           int
+	Y           int
+	Confidence  float64
+	Description string
+}
 
 type RateLimitError struct {
 	StatusCode int
@@ -70,6 +88,62 @@ func New(apiKey string, options ...Option) *Provider {
 		provider.client = http.DefaultClient
 	}
 	return provider
+}
+
+func (p *Provider) Locate(ctx context.Context, request GroundingRequest) ([]VisualMatch, error) {
+	request.Description = strings.TrimSpace(request.Description)
+	if request.Model == "" || request.Description == "" || !utf8.ValidString(request.Description) ||
+		utf8.RuneCountInString(request.Description) > 500 ||
+		len(request.Image) == 0 || len(request.Image) > 10<<20 ||
+		request.Width < 1 || request.Width > 10_000 || request.Height < 1 || request.Height > 10_000 ||
+		request.Limit < 1 || request.Limit > 10 {
+		return nil, ErrInvalidGroundingRequest
+	}
+	instruction := fmt.Sprintf(
+		"Locate up to %d visible matches for the requested UI target in this %dx%d screenshot. "+
+			"Return only JSON as {\"matches\":[{\"x\":0,\"y\":0,\"confidence\":0.0,\"description\":\"\"}]}. "+
+			"Coordinates are viewport pixels and confidence is between 0 and 1.",
+		request.Limit, request.Width, request.Height,
+	)
+	modelRequest := agent.ModelRequest{
+		Model:             agent.ModelRef{Provider: "gemini", Model: request.Model},
+		SystemInstruction: instruction,
+		Messages: []agent.Message{{
+			Role: agent.RoleUser,
+			Parts: []agent.MessagePart{
+				{Text: &agent.TextPart{Text: request.Description}},
+				{Image: &agent.ImagePart{Data: request.Image, MediaType: "image/png"}},
+			},
+		}},
+		Generation: agent.GenerationOptions{JSONMode: true},
+	}
+	var output strings.Builder
+	if err := p.Stream(ctx, modelRequest, func(event agent.ModelEvent) error {
+		response, ok := event.(agent.ModelResponse)
+		if !ok {
+			return nil
+		}
+		for _, part := range response.Parts {
+			if part.Text != nil {
+				output.WriteString(part.Text.Text)
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	var decoded struct {
+		Matches []VisualMatch
+	}
+	decoder := json.NewDecoder(strings.NewReader(output.String()))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return nil, fmt.Errorf("%w: grounding JSON: %v", ErrInvalidResponse, err)
+	}
+	if len(decoded.Matches) > request.Limit {
+		return nil, fmt.Errorf("%w: too many grounding matches", ErrInvalidResponse)
+	}
+	return decoded.Matches, nil
 }
 
 func (p *Provider) Stream(ctx context.Context, request agent.ModelRequest, emit func(agent.ModelEvent) error) error {

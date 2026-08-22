@@ -28,6 +28,7 @@ type Options struct {
 	Model         string
 	APIKey        string
 	Provider      agent.Provider // Provider makes deterministic tests possible without Gemini.
+	Grounder      Grounder
 }
 
 type Runner struct {
@@ -37,6 +38,7 @@ type Runner struct {
 	timeout       time.Duration
 	model         agent.ModelRef
 	runtime       *agent.Runtime
+	grounder      Grounder
 	configured    bool
 	publish       Publisher
 }
@@ -58,11 +60,19 @@ func New(runStore *store.Store, factory browser.Factory, options Options) *Runne
 	if provider == nil && options.APIKey != "" {
 		provider = gemini.New(options.APIKey)
 	}
+	grounder := options.Grounder
+	if grounder == nil {
+		if direct, ok := provider.(Grounder); ok {
+			grounder = direct
+		} else if geminiProvider, ok := provider.(*gemini.Provider); ok {
+			grounder = geminiGrounder{provider: geminiProvider, model: options.Model}
+		}
+	}
 	var runtime *agent.Runtime
 	if provider != nil {
 		runtime = agent.NewRuntime(map[string]agent.Provider{"gemini": provider}, agent.NewInMemorySessionStore(), agent.WithMaxModelCalls(32))
 	}
-	return &Runner{store: runStore, browser: factory, screenshotDir: options.ScreenshotDir, timeout: options.Timeout, model: agent.ModelRef{Provider: "gemini", Model: options.Model}, runtime: runtime, configured: provider != nil, publish: nil}
+	return &Runner{store: runStore, browser: factory, screenshotDir: options.ScreenshotDir, timeout: options.Timeout, model: agent.ModelRef{Provider: "gemini", Model: options.Model}, runtime: runtime, grounder: grounder, configured: provider != nil, publish: nil}
 }
 
 func timeoutFromEnv() time.Duration {

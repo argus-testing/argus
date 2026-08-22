@@ -287,6 +287,10 @@ func TestPlaywrightFormAndDiagnosticSurface(t *testing.T) {
 		t.Fatalf("network errors = %#v, %v", networkErrors, err)
 	}
 
+	pointElement, err := session.ElementAt(context.Background(), page.Width-60, page.Height-35)
+	if err != nil || pointElement.Name != "Point target" {
+		t.Fatalf("point element = %#v, %v", pointElement, err)
+	}
 	if _, err := session.ClickPoint(context.Background(), page.Width-60, page.Height-35); err != nil {
 		t.Fatal(err)
 	}

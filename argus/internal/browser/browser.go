@@ -41,6 +41,7 @@ type Session interface {
 	Navigate(context.Context, string) (Navigation, error)
 	Inspect(context.Context) (PageSnapshot, error)
 	Element(context.Context, string) (Element, error)
+	ElementAt(context.Context, int, int) (Element, error)
 	Click(context.Context, string) (ActionResult, error)
 	Type(context.Context, string, InputValue) (ActionResult, error)
 	FillForm(context.Context, map[string]InputValue) (ActionResult, error)
@@ -54,6 +55,7 @@ type Session interface {
 	NetworkErrors(context.Context) ([]NetworkError, error)
 	ClickPoint(context.Context, int, int) (ActionResult, error)
 	Screenshot(context.Context, string) error
+	ScreenshotViewport(context.Context, string) error
 	Close() error
 }
 
@@ -224,6 +226,32 @@ func (s *playwrightSession) Element(ctx context.Context, reference string) (Elem
 	return s.elements.element(reference)
 }
 
+func (s *playwrightSession) ElementAt(ctx context.Context, x, y int) (Element, error) {
+	if err := ctx.Err(); err != nil {
+		return Element{}, err
+	}
+	viewport := s.page.ViewportSize()
+	if viewport == nil || x < 0 || y < 0 || x >= viewport.Width || y >= viewport.Height {
+		return Element{}, errors.New("point is outside the viewport")
+	}
+	raw, err := s.page.Evaluate(elementAtJavaScript, []int{x, y})
+	if err != nil {
+		return Element{}, err
+	}
+	if raw == nil {
+		return Element{}, ErrUnknownElement
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return Element{}, err
+	}
+	var element Element
+	if err := json.Unmarshal(encoded, &element); err != nil {
+		return Element{}, fmt.Errorf("decode point element: %w", err)
+	}
+	return element, nil
+}
+
 func (s *playwrightSession) Click(ctx context.Context, reference string) (ActionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ActionResult{}, err
@@ -385,10 +413,17 @@ func (s *playwrightSession) ClickPoint(ctx context.Context, x, y int) (ActionRes
 }
 
 func (s *playwrightSession) Screenshot(ctx context.Context, path string) error {
+	return s.screenshot(ctx, path, true)
+}
+
+func (s *playwrightSession) ScreenshotViewport(ctx context.Context, path string) error {
+	return s.screenshot(ctx, path, false)
+}
+
+func (s *playwrightSession) screenshot(ctx context.Context, path string, fullPage bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	fullPage := true
 	maskColor := "#FF00FF"
 	mask := s.page.Locator("input[type=\"password\"], [data-argus-sensitive=\"true\"]")
 	_, err := s.page.Screenshot(playwright.PageScreenshotOptions{
