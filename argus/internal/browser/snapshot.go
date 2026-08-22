@@ -60,8 +60,9 @@ type elementTarget struct {
 }
 
 type elementRegistry struct {
-	generation int
-	targets    map[string]elementTarget
+	generation  int
+	targets     map[string]elementTarget
+	invalidated bool
 }
 
 func newElementRegistry() *elementRegistry {
@@ -70,6 +71,7 @@ func newElementRegistry() *elementRegistry {
 
 func (r *elementRegistry) replace(targets []elementTarget) []string {
 	r.generation++
+	r.invalidated = false
 	r.targets = make(map[string]elementTarget, len(targets))
 	references := make([]string, len(targets))
 	for index, target := range targets {
@@ -90,11 +92,14 @@ func (r *elementRegistry) element(reference string) (Element, error) {
 }
 
 func (r *elementRegistry) invalidate() {
-	r.generation++
 	r.targets = make(map[string]elementTarget)
+	r.invalidated = true
 }
 
 func (r *elementRegistry) resolve(reference string) (elementTarget, error) {
+	if r.invalidated && reference != "" {
+		return elementTarget{}, ErrStaleElement
+	}
 	target, ok := r.targets[reference]
 	if ok {
 		return target, nil

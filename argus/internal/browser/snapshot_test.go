@@ -37,3 +37,16 @@ func TestElementRegistryRejectsUnknownReference(t *testing.T) {
 		t.Fatalf("resolve = %v", err)
 	}
 }
+
+func TestElementRegistryInvalidationAdvancesExactlyOnce(t *testing.T) {
+	registry := newElementRegistry()
+	first := registry.replace([]elementTarget{{selector: "first"}})
+	registry.invalidate()
+	if _, err := registry.resolve(first[0]); !errors.Is(err, ErrStaleElement) {
+		t.Fatalf("invalidated resolve = %v", err)
+	}
+	second := registry.replace([]elementTarget{{selector: "second"}})
+	if second[0] != "e2-1" {
+		t.Fatalf("second reference = %q", second[0])
+	}
+}

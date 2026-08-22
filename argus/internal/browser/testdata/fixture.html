@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Argus QA Fixture</title>
+    <style>
+      body { font-family: sans-serif; min-height: 1400px; margin: 24px; }
+      label, button { display: block; margin-top: 12px; }
+      nav { display: flex; gap: 12px; }
+      @media (max-width: 500px) { nav { display: none; } }
+    </style>
+  </head>
+  <body>
+    <nav aria-label="Primary navigation"><a href="#search">Search</a></nav>
+    <main id="search">
+      <label for="query">Company search</label>
+      <input id="query" placeholder="Company">
+      <label for="batch">Batch</label>
+      <select id="batch">
+        <option>All</option>
+        <option>Winter 2024</option>
+      </select>
+      <button id="show" type="button">Show result</button>
+      <p id="result" aria-live="polite"></p>
+
+      <button id="save" type="button">Save preference</button>
+      <p id="save-result" aria-live="polite"></p>
+      <button id="delete" type="button" data-destructive>Delete account</button>
+
+      <button id="delayed" type="button">Load delayed content</button>
+      <p id="delayed-result" aria-live="polite"></p>
+      <button id="console-error" type="button">Log console error</button>
+      <button id="network-error" type="button">Load missing resource</button>
+      <a id="redirect" href="/redirect">Redirect</a>
+    </main>
+    <script>
+      document.querySelector('#show').addEventListener('click', () => {
+        const query = document.querySelector('#query').value;
+        const batch = document.querySelector('#batch').value;
+        document.querySelector('#result').textContent = query + ' — ' + batch;
+      });
+      document.querySelector('#save').addEventListener('click', async () => {
+        const response = await fetch('/api/save', { method: 'POST' });
+        document.querySelector('#save-result').textContent = await response.text();
+      });
+      document.querySelector('#delete').addEventListener('click', () => {
+        fetch('/api/account', { method: 'DELETE' });
+      });
+      document.querySelector('#delayed').addEventListener('click', () => {
+        setTimeout(() => { document.querySelector('#delayed-result').textContent = 'Delayed content ready'; }, 50);
+      });
+      document.querySelector('#console-error').addEventListener('click', () => {
+        console.error('fixture console failure');
+      });
+      document.querySelector('#network-error').addEventListener('click', () => {
+        fetch('/missing');
+      });
+    </script>
+  </body>
+</html>
