@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { CheckCircle2, KeyRound, Server, XCircle } from "lucide-react";
+import { McpIntegration } from "../components/integrations/McpIntegration";
 import { TopBar } from "../components/layout/TopBar";
 import { Card } from "../components/ui/Card";
 import { Spinner } from "../components/ui/Spinner";
@@ -29,6 +30,7 @@ export function SettingsPage() {
         <div className="setting-item compact-setting"><span className="setting-icon"><Server size={18} /></span><div><h3>Model</h3><p>Override with <code>GEMINI_MODEL</code>.</p></div><code>{settings.model}</code></div>
         <div className="settings-note">Target-site credentials are not stored or managed in this release.</div>
       </Card>}
+      <McpIntegration settings={settings} error={error} />
     </main>
   </>;
 }
