@@ -4,6 +4,7 @@
 !.env.example
 .pi-subagents/
 .superpowers/
+.worktrees/
 frontend/node_modules/
 frontend/dist/
 *.tsbuildinfo
