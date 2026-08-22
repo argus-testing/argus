@@ -4,11 +4,14 @@ go 1.25.0
 
 require (
 	github.com/coder/websocket v1.8.15
+	github.com/mxschmitt/playwright-go v0.6201.1
 	modernc.org/sqlite v1.57.0
 )
 
 require (
+	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/go-stack/stack v1.8.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect

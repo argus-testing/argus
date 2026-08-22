@@ -6,11 +6,19 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ace-foundry/argus-testing/backend-go/internal/browser"
+	"github.com/ace-foundry/argus-testing/backend-go/internal/runner"
 	"github.com/ace-foundry/argus-testing/backend-go/internal/server"
 	"github.com/ace-foundry/argus-testing/backend-go/internal/store"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "install-browser" {
+		if err := browser.Install(); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	dataDir := os.Getenv("ARGUS_DATA_DIR")
 	if dataDir == "" {
 		dataDir = "data"
@@ -24,10 +32,12 @@ func main() {
 		log.Fatal(err)
 	}
 	defer runStore.Close()
-	handler, err := server.New(runStore, nil, optionsFromEnv(dataDir))
+	runRunner := runner.New(runStore, browser.NewPlaywrightFactory(), runner.Options{ScreenshotDir: screenshotDir})
+	handler, err := server.New(runStore, runRunner, optionsFromEnv(dataDir))
 	if err != nil {
 		log.Fatal(err)
 	}
+	runRunner.SetPublisher(handler.Publish)
 	address := os.Getenv("ARGUS_ADDR")
 	if address == "" {
 		address = ":8000"
