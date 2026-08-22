@@ -6,10 +6,21 @@ import (
 	"testing"
 )
 
-func TestDefaultStaticDirFindsFrontend(t *testing.T) {
-	path := defaultStaticDir()
-	if info, err := os.Stat(filepath.Join(path, "index.html")); err != nil || info.IsDir() {
-		t.Fatalf("static index = %q, %v", path, err)
+func TestFindStaticDirWalksFromProvidedDirectory(t *testing.T) {
+	root := t.TempDir()
+	want := filepath.Join(root, "argus", "static")
+	if err := os.MkdirAll(want, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(want, "index.html"), []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(root, "argus", "cmd", "argus")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := findStaticDir(nested); got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 

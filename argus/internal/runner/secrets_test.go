@@ -65,3 +65,15 @@ func TestSecretsRejectInvalidOrOversizedBindings(t *testing.T) {
 		})
 	}
 }
+
+func TestSecretsExposeOnlySortedBindingNames(t *testing.T) {
+	secrets, err := newSecretSet(map[string]string{"z_token": "private-z", "a_token": "private-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secrets.Close()
+	names := secrets.Names()
+	if len(names) != 2 || names[0] != "a_token" || names[1] != "z_token" {
+		t.Fatalf("names = %#v", names)
+	}
+}

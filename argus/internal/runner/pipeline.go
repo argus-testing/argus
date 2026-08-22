@@ -388,7 +388,7 @@ func (a *browserAdapter) inputValue(values map[string]any) (browser.InputValue, 
 		return browser.InputValue{Text: value}, nil
 	}
 	name, ok := secret.(string)
-	if !ok || !secretBindingName.MatchString(name) {
+	if !ok || !domain.ValidSecretBindingName(name) {
 		return browser.InputValue{}, errors.New("invalid secret binding")
 	}
 	value, ok := a.secrets.Resolve(name)

@@ -2,7 +2,7 @@ import { useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { ArrowUp, Globe } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
-import type { Run } from "../../types";
+import type { CreateRunRequest, Run } from "../../types";
 
 const suggestions = [
   "Check that navigation links work across all pages",
@@ -19,6 +19,9 @@ export function NewTestInput() {
   const [focused, setFocused] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [allowMutations, setAllowMutations] = useState(false);
+  const [allowDestructive, setAllowDestructive] = useState(false);
+  const [allowedOrigins, setAllowedOrigins] = useState("");
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
@@ -26,9 +29,19 @@ export function NewTestInput() {
     setSubmitting(true);
     setError("");
     try {
+      const origins = allowedOrigins.split("\n").map((value) => value.trim()).filter(Boolean);
+      const request: CreateRunRequest = {
+        url: url.trim(),
+        instructions: instructions.trim(),
+        authorization: allowMutations || origins.length > 0 ? {
+          allow_mutations: allowMutations,
+          allow_destructive: allowMutations && allowDestructive,
+          allowed_origins: origins,
+        } : undefined,
+      };
       const run = await api<Run>("/api/runs", {
         method: "POST",
-        body: JSON.stringify({ url: url.trim(), instructions: instructions.trim() }),
+        body: JSON.stringify(request),
       });
       navigate(`/runs/${run.id}`);
     } catch (reason) {
@@ -61,6 +74,41 @@ export function NewTestInput() {
       <Globe size={13} />
       <input type="url" required value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com" aria-label="Target URL" />
     </div>
+    <details className="run-policy">
+      <summary>Run policy <span>{allowMutations ? "Mutations authorized" : "Read-only"}</span></summary>
+      <div className="run-policy-fields">
+        <label className="policy-toggle">
+          <input
+            type="checkbox"
+            checked={allowMutations}
+            onChange={(event) => {
+              setAllowMutations(event.target.checked);
+              if (!event.target.checked) setAllowDestructive(false);
+            }}
+          />
+          <span><strong>Allow state-changing actions</strong><small>Permits form submissions and non-read-only network requests.</small></span>
+        </label>
+        <label className="policy-toggle">
+          <input
+            type="checkbox"
+            checked={allowDestructive}
+            disabled={!allowMutations}
+            onChange={(event) => setAllowDestructive(event.target.checked)}
+          />
+          <span><strong>Allow destructive actions</strong><small>Separately permits controls classified as delete, remove, purchase, or equivalent.</small></span>
+        </label>
+        <label className="policy-origins-label" htmlFor="allowed-origins">Additional allowed origins</label>
+        <textarea
+          id="allowed-origins"
+          className="policy-origins"
+          rows={2}
+          value={allowedOrigins}
+          onChange={(event) => setAllowedOrigins(event.target.value)}
+          placeholder={"https://accounts.example.com\nhttps://cdn.example.com"}
+        />
+        <small>One HTTP(S) origin per line. The target origin is always included. Secret bindings are accepted only through the API.</small>
+      </div>
+    </details>
     <div className="composer-toolbar">
       <span><Globe size={13} />Target URL</span>
       <span className="key-hint">Enter to run · Shift + Enter for a new line</span>

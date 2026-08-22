@@ -20,17 +20,29 @@ The fastest way to run Argus: no install, no API keys to manage, nothing to self
 
 Get started at [argustest.com](https://argustest.com/).
 
-## Multi-agent pipeline
+## Six-stage agent pipeline
 
-A run isn't a single model call — it's five agents handing off to each other, and you can watch each one work in the live run view:
+A run is a bounded six-stage pipeline rather than one unconstrained model call:
 
 1. **Validator** — checks the target URL and test description are actually testable before a run starts.
 2. **Comprehender** — reads the test description and breaks it into distinct test cases.
 3. **Explorer** — crawls the app first, mapping out pages and the actions available on each.
 4. **Strategist** — turns the map and test cases into a concrete step-by-step plan.
 5. **Executor** — runs the plan in a real browser: navigating, typing, clicking, and confirming outcomes as it goes.
+6. **Critic** — independently reviews the request, execution, and evidence before a verdict is accepted.
 
-Nothing happens in a black box — each agent streams its reasoning as it works, down to individual actions like "Navigating to /companies" or "Confirming 'Airbnb' is on the page," so you see the app get mapped, the plan get built, and the test get executed, live.
+Stage handoffs use validated JSON contracts. A malformed handoff gets one repair attempt. A pass is accepted only when every executed case passes and cites a screenshot that was actually persisted for the run.
+
+### Browser capabilities
+
+The Go agent exposes a semantic, reference-based browser surface:
+
+- inspection, navigation, clicking, typing, multi-field filling, form submission, and select controls
+- keyboard input, scrolling, viewport resizing, bounded waits, console errors, and network errors
+- full-page evidence screenshots and fresh viewport screenshots returned directly to Gemini
+- visual `find_elements` and guarded `visual_click` grounding when Gemini is configured
+
+Model calls never receive arbitrary CSS-selector access. Each inspection creates run-local element references; stale references are rejected after navigation or a fresh inspection. Visual clicks resolve the real DOM element under Gemini's proposed coordinate and apply the same action policy before clicking.
 
 ## Inside Argus
 
@@ -65,7 +77,7 @@ Argus runs this like a person would — clicking through the flow, reading the p
 
 ## Run it yourself
 
-Argus is source-available and fully local-first — SQLite storage, no telemetry, your data and screenshots never leave your machine. Prefer to self-host? Follow the steps below.
+Argus is source-available and local-first — SQLite storage and no application telemetry. Browser observations and screenshots are sent to the configured Gemini API when needed for agent execution; run metadata and evidence remain in the local SQLite/data directory.
 
 ### Requirements
 
@@ -76,7 +88,7 @@ Argus is source-available and fully local-first — SQLite storage, no telemetry
 From the repository root:
 
 ```bash
-cd frontend && npm install && npm run build && cd ..
+cd frontend && npm ci && npm run build && cd ..
 go -C argus run ./cmd/argus install-browser
 GEMINI_API_KEY=your-key GEMINI_MODEL=gemini-2.5-flash ARGUS_RUN_TIMEOUT=300 ARGUS_DB_PATH=data/argus.db PORT=8000 go -C argus run ./cmd/argus
 ```
@@ -93,6 +105,30 @@ Configuration is environment-only:
 | `ARGUS_DB_PATH` | `data/argus.db` | SQLite file; screenshots are stored beside it |
 | `PORT` | `8000` | Go server port |
 | `ARGUS_BASE_URL` | `http://127.0.0.1:8000` | Running local Argus REST server used by the MCP adapter |
+
+### Run authorization and secret bindings
+
+Runs are read-only by default. The initial target origin is always allowed. Additional origins, state-changing actions, and destructive controls require explicit per-run authorization:
+
+```json
+{
+  "url": "https://app.example.com",
+  "instructions": "Sign in and verify the account page",
+  "authorization": {
+    "allow_mutations": true,
+    "allow_destructive": false,
+    "allowed_origins": ["https://accounts.example.com"],
+    "secret_bindings": {
+      "login_email": "qa@example.com",
+      "login_password": "provided-at-request-time"
+    }
+  }
+}
+```
+
+Submit that object to `POST /api/runs`. Secret values are copied into run-scoped memory, resolved only at the final typing call, redacted from model-visible text, masked in screenshots, never written to SQLite/events/reports, and zeroed when the run exits. Binding names must match `^[A-Za-z_][A-Za-z0-9_.-]{0,99}$`; at most 20 bindings of 4 KiB each are accepted. The dashboard intentionally exposes policy controls but no raw-secret fields.
+
+Read-only browser contexts abort non-GET/HEAD/OPTIONS requests. Document navigations—including redirects and link clicks—are restricted to the target origin plus `allowed_origins`. `allow_destructive` is invalid unless `allow_mutations` is also enabled.
 
 ### Connect an MCP client
 
@@ -117,7 +153,7 @@ Ensure Go's bin directory (usually `$(go env GOPATH)/bin`) is on your `PATH`, th
 
 The adapter exposes `start_test`, `get_test_run`, `list_test_runs`, `cancel_test`, and `get_test_evidence`. It connects only to the existing REST server; start Go Argus before using these tools. The same client-specific configuration and server status are available in **Settings → MCP setup**.
 
-Argus accepts normal HTTP(S) targets, including trusted localhost and private-network apps. It rejects credentials and sensitive query parameters in target URLs, and never stores provider secrets, typed browser values, or inspected page content. The settings screen only shows whether provider configuration is present.
+Argus accepts normal HTTP(S) targets, including trusted localhost and private-network apps. It rejects credentials and sensitive query parameters in target URLs. The settings screen only shows whether provider configuration is present.
 
 ### Docker
 
@@ -133,21 +169,29 @@ The UI is available at <http://localhost:8000> and persistent data is written to
 
 ```bash
 cd argus && go test -race ./... && go vet ./...
-cd ../frontend && npm run typecheck && npm run lint && npm run build
+cd ../frontend && npm ci && npm test && npm run typecheck && npm run lint && npm run build
+```
+
+The default Go suite is offline and uses deterministic provider doubles. After `go run ./cmd/argus install-browser`, set `ARGUS_PLAYWRIGHT_SMOKE=1` to include the real Chromium fixture and full runner integration:
+
+```bash
+cd argus
+ARGUS_PLAYWRIGHT_SMOKE=1 go test -race ./...
 ```
 
 ### Architecture
 
 - `argus/cmd/argus`: local REST/WebSocket server and built UI serving
-- `argus/internal/runner`: Gemini pipeline, Playwright browser runs, SQLite evidence
+- `argus/internal/runner`: six-stage Gemini pipeline, strict contracts, browser policy, and evidence gating
+- `argus/internal/browser`: isolated Playwright sessions, semantic references, request interception, and redacted screenshots
 - `argus/cmd/argus-mcp`: local stdio MCP adapter for the REST server
 - `frontend`: dashboard/composer, live session, history, report, and read-only settings
 
-All data is local; there is no authentication or multi-user isolation in this release.
+There is no server authentication or multi-user isolation in this release. Bind the server to a trusted interface and put an authenticating reverse proxy in front of it when exposing it beyond localhost.
 
 ## License
 
-Argus is source-available under the [Argus Source-Available License 1.0 (ASAL-1.0)](LICENSE).
+Argus is source-available—not OSI open source today—under the [Argus Source-Available License 1.0 (ASAL-1.0)](LICENSE).
 
 - **Individuals & Small Teams (< 100 members):** Free to use, modify, and self-host for both commercial and non-commercial purposes.
 - **Enterprises (100+ members):** Requires a commercial license. Contact us at [licensing@argustest.com](mailto:licensing@argustest.com) to get set up.

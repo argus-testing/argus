@@ -75,7 +75,7 @@ func TestRESTRoutesValidationAndCancellation(t *testing.T) {
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
 	client := httpServer.Client()
-	for _, payload := range []string{`{"url":"file:///etc/passwd","instructions":"check"}`, `{"url":"https://user:secret@example.com","instructions":"check"}`, `{"url":"https://example.com/?access_token=x","instructions":"check"}`, `{"url":"https://example.com","instructions":""}`} {
+	for _, payload := range []string{`{"url":"file:///etc/passwd","instructions":"check"}`, `{"url":"https://user:secret@example.com","instructions":"check"}`, `{"url":"https://example.com/?access_token=x","instructions":"check"}`, `{"url":"https://example.com","instructions":""}`, `{"url":"https://example.com","instructions":"check","authorization":{"secret_bindings":{"not a binding":"private"}}}`} {
 		response := request(t, client, http.MethodPost, httpServer.URL+"/api/runs", payload)
 		if response.StatusCode != http.StatusUnprocessableEntity {
 			t.Fatalf("status = %d", response.StatusCode)

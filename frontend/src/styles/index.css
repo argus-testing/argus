@@ -80,6 +80,17 @@ a { color: inherit; }
 .composer textarea::placeholder, .composer input::placeholder { color: var(--text-tertiary); }
 .url-field { display: flex; align-items: center; gap: 8px; margin: 0 12px 8px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-primary); padding: 7px 12px; color: var(--text-tertiary); }
 .url-field input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text-primary); font: 12px 'Google Sans Mono', monospace; }
+.run-policy { margin: 0 12px 8px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-primary); }
+.run-policy summary { display: flex; cursor: pointer; align-items: center; justify-content: space-between; padding: 8px 12px; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+.run-policy summary span { color: var(--text-tertiary); font-weight: 500; }
+.run-policy-fields { display: grid; gap: 10px; border-top: 1px solid var(--border-color); padding: 12px; }
+.policy-toggle { display: flex; align-items: flex-start; gap: 9px; color: var(--text-secondary); font-size: 12px; }
+.policy-toggle input { margin-top: 2px; accent-color: var(--accent); }
+.policy-toggle span { display: grid; gap: 2px; }
+.policy-toggle strong { color: var(--text-primary); font-weight: 600; }
+.policy-toggle small, .run-policy-fields > small { color: var(--text-tertiary); line-height: 1.4; }
+.policy-origins-label { color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+.composer .policy-origins { min-height: 58px; resize: vertical; border: 1px solid var(--border-color); border-radius: 7px; background: var(--bg-secondary); padding: 8px 10px; font: 12px/1.5 'Google Sans Mono', monospace; }
 .composer-toolbar { display: flex; min-height: 44px; align-items: center; gap: 8px; padding: 4px 12px 12px; }
 .composer-toolbar > span:first-child { display: flex; align-items: center; gap: 6px; border-radius: 8px; color: var(--text-tertiary); font-size: 12px; font-weight: 500; }
 .key-hint { margin-left: auto; color: var(--text-tertiary); font-size: 10px; }

@@ -22,6 +22,25 @@ export interface RunReport {
   recommendations: string[];
 }
 
+export interface RunAuthorization {
+  allow_mutations?: boolean;
+  allow_destructive?: boolean;
+  allowed_origins?: string[];
+  secret_bindings?: Record<string, string>;
+}
+
+export interface RunPolicy {
+  allow_mutations: boolean;
+  allow_destructive: boolean;
+  allowed_origins: string[];
+}
+
+export interface CreateRunRequest {
+  url: string;
+  instructions: string;
+  authorization?: RunAuthorization;
+}
+
 export interface Run {
   id: string;
   url: string;
@@ -31,6 +50,7 @@ export interface Run {
   updated_at: string;
   error: string | null;
   report: RunReport | null;
+  policy?: RunPolicy;
   events?: RunEvent[];
 }
 

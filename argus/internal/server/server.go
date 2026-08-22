@@ -612,14 +612,10 @@ func decodeCreateRequest(body io.Reader) (domain.CreateRequest, []validationErro
 	if len(authorization.AllowedOrigins) > 20 {
 		validation = append(validation, validationError{Loc: []any{"body", "authorization", "allowed_origins"}, Type: "too_long", Msg: "At most 20 additional origins are allowed"})
 	}
-	if len(authorization.SecretBindings) > 20 {
+	if len(authorization.SecretBindings) > domain.MaxSecretBindings {
 		validation = append(validation, validationError{Loc: []any{"body", "authorization", "secret_bindings"}, Type: "too_long", Msg: "At most 20 secret bindings are allowed"})
-	}
-	for name, value := range authorization.SecretBindings {
-		if strings.TrimSpace(name) == "" || len(name) > 100 || value == "" || len(value) > 4096 {
-			validation = append(validation, validationError{Loc: []any{"body", "authorization", "secret_bindings"}, Type: "value_error", Msg: "Secret binding names and values must be non-empty and bounded"})
-			break
-		}
+	} else if err := domain.ValidateSecretBindings(authorization.SecretBindings); err != nil {
+		validation = append(validation, validationError{Loc: []any{"body", "authorization", "secret_bindings"}, Type: "value_error", Msg: "Secret binding names must be identifiers and values must be non-empty and at most 4096 bytes"})
 	}
 	policyTarget := request.URL
 	if parsed, _, _, err := parseURLCompatible(request.URL); err == nil {

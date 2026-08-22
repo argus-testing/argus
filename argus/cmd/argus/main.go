@@ -108,6 +108,11 @@ func defaultStaticDir() string {
 	if err != nil {
 		return filepath.Join("argus", "static")
 	}
+	return findStaticDir(directory)
+}
+
+func findStaticDir(start string) string {
+	directory := filepath.Clean(start)
 	for {
 		candidate := filepath.Join(directory, "argus", "static")
 		if info, err := os.Stat(filepath.Join(candidate, "index.html")); err == nil && !info.IsDir() {

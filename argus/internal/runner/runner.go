@@ -209,10 +209,15 @@ func (r *Runner) execute(ctx context.Context, id string, run *domain.Run, author
 	if err != nil {
 		return nil, err
 	}
+	secretBindings := secrets.Names()
+	secretContext := ""
+	if len(secretBindings) > 0 {
+		secretContext = "\nAvailable secret bindings (names only): " + strings.Join(secretBindings, ", ")
+	}
 	var executionContract ExecutionResult
 	execution, err := r.completeContract(
 		ctx, spec("executor", executorInstruction, r.model, browserTools(adapter, true), true),
-		id+":executor", imageMessage("Target: "+run.URL+"\nGoal: "+run.Instructions+"\nPlan:\n"+plan+"\nApp Map:\n"+explorer, preExecution.data),
+		id+":executor", imageMessage("Target: "+run.URL+"\nGoal: "+run.Instructions+"\nPlan:\n"+plan+"\nApp Map:\n"+explorer+secretContext, preExecution.data),
 		id, &executionContract, func() error {
 			return validateExecutionAgainstPlan(planContract, executionContract)
 		},

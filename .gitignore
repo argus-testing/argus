@@ -12,5 +12,9 @@ frontend/dist/
 /argus/argus-mcp
 /.python-backend/
 data
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
 
 /argus/static/
