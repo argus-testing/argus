@@ -94,6 +94,25 @@ Configuration is environment-only:
 | `ARGUS_DATA_DIR` | `data` | SQLite and screenshot directory |
 | `ARGUS_HEADLESS` | `true` | Playwright browser mode |
 | `ARGUS_RUN_TIMEOUT` | `300` | Run timeout in seconds |
+| `ARGUS_BASE_URL` | `http://127.0.0.1:8000` | Running local Argus REST server used by the MCP adapter |
+
+### Connect an MCP client
+
+Start Argus normally, then configure your MCP client to launch the local stdio adapter:
+
+```json
+{
+  "mcpServers": {
+    "argus": {
+      "command": "uv",
+      "args": ["run", "argus-mcp"],
+      "env": {"ARGUS_BASE_URL": "http://127.0.0.1:8000"}
+    }
+  }
+}
+```
+
+The adapter exposes `start_test`, `get_test_run`, `list_test_runs`, `cancel_test`, and `get_test_evidence`. It connects only to the existing REST server; start Uvicorn before using these tools.
 
 Argus accepts normal HTTP(S) targets, including trusted localhost and private-network apps. It rejects credentials and sensitive query parameters in target URLs, and never stores provider secrets, typed browser values, or inspected page content. The settings screen only shows whether provider configuration is present.
 

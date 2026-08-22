@@ -7,9 +7,13 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
     "httpx>=0.27.0",
+    "mcp>=1.14,<2",
     "playwright>=1.50",
     "uvicorn[standard]>=0.34",
 ]
+
+[project.scripts]
+argus-mcp = "argus.mcp_server:main"
 
 [build-system]
 requires = ["hatchling"]
