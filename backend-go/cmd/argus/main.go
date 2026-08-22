@@ -32,7 +32,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer runStore.Close()
-	runRunner := runner.New(runStore, browser.NewPlaywrightFactory(), runner.Options{ScreenshotDir: screenshotDir})
+	runRunner := runner.New(runStore, browser.NewPlaywrightFactory(), runnerOptionsFromEnv(screenshotDir))
 	handler, err := server.New(runStore, runRunner, optionsFromEnv(dataDir))
 	if err != nil {
 		log.Fatal(err)
@@ -43,6 +43,10 @@ func main() {
 		address = ":8000"
 	}
 	log.Fatal(http.ListenAndServe(address, handler))
+}
+
+func runnerOptionsFromEnv(screenshotDir string) runner.Options {
+	return runner.Options{ScreenshotDir: screenshotDir, Model: os.Getenv("GEMINI_MODEL")}
 }
 
 func optionsFromEnv(dataDir ...string) server.Options {

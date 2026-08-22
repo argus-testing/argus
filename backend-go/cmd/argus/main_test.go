@@ -13,9 +13,12 @@ func TestDefaultStaticDirFindsFrontend(t *testing.T) {
 	}
 }
 
-func TestServerOptionsReadGeminiModel(t *testing.T) {
+func TestOptionsReadGeminiModel(t *testing.T) {
 	t.Setenv("GEMINI_MODEL", "gemini-test")
 	if optionsFromEnv().Model != "gemini-test" {
-		t.Fatalf("model = %q", optionsFromEnv().Model)
+		t.Fatalf("server model = %q", optionsFromEnv().Model)
+	}
+	if runnerOptionsFromEnv("screenshots").Model != "gemini-test" {
+		t.Fatalf("runner model = %q", runnerOptionsFromEnv("screenshots").Model)
 	}
 }
