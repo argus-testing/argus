@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -226,9 +227,11 @@ func TestRunnerRunsPublicPipelineAndPersistsSafeBrowserEvents(t *testing.T) {
 	run := queuedRun(t, db)
 	session := &fakeSession{screenshotData: [][]byte{[]byte("initial-shot"), []byte("pre-execution-shot"), []byte("tool-shot"), []byte("final-shot")}}
 	provider := &scriptedProvider{responses: []agent.ModelResponse{
-		response(`{"testable":true}`), response(`{"intent":"search"}`),
-		tool("inspect_page", map[string]any{}), response(`{"pages":[]}`), response(`{"tests":[]}`),
-		tool("click", map[string]any{"ref": "e1-1"}), tool("screenshot", map[string]any{"label": "Search result"}), response(`{"status":"passed"}`),
+		response(`{"testable":true}`), response(`{"objective":"Verify search","features":["Search"],"constraints":["Read-only"]}`),
+		tool("inspect_page", map[string]any{}), response(`{"pages":[{"url":"https://example.com","name":"Example","features":["Search"]}]}`),
+		response(`{"cases":[{"id":"T1","name":"Search","steps":["Open search","Verify result"],"success":"A result is visible"}]}`),
+		tool("click", map[string]any{"ref": "e1-1"}), tool("screenshot", map[string]any{"label": "Search result"}),
+		response(fmt.Sprintf(`{"cases":[{"id":"T1","status":"passed","steps":["Clicked search","Observed result"],"findings":[],"evidence":["/screenshots/%s/search-result-3.png"]}],"summary":"Search passed"}`, run.ID)),
 		response("```json\n{\"verdict\":\"passed\",\"summary\":\"verified\",\"findings\":[{\"severity\":\"info\",\"title\":\"ok\",\"detail\":\"works\"}],\"recommendations\":[\"keep it\"]}\n```"),
 	}}
 	r := New(db, fakeFactory{session: session}, Options{ScreenshotDir: filepath.Join(t.TempDir(), "screenshots"), Provider: provider})
@@ -314,7 +317,7 @@ func TestRunnerRejectsTypeTextWithoutElementReference(t *testing.T) {
 	run := queuedRun(t, db)
 	session := &fakeSession{}
 	provider := &scriptedProvider{responses: []agent.ModelResponse{
-		response(`{"testable":true}`), response(`{"intent":"search"}`),
+		response(`{"testable":true}`), response(`{"objective":"Verify search","features":["Search"],"constraints":["Read-only"]}`),
 		tool("type_text", map[string]any{"text": "credential"}),
 	}}
 	r := New(db, fakeFactory{session: session}, Options{ScreenshotDir: t.TempDir(), Provider: provider})
@@ -508,7 +511,7 @@ func TestRunnerDoesNotOverwriteCancellationRace(t *testing.T) {
 	var once sync.Once
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	provider := &scriptedProvider{responses: []agent.ModelResponse{response(`{"testable":true}`), response(`{}`)}}
+	provider := &scriptedProvider{responses: []agent.ModelResponse{response(`{"testable":true}`), response(`{"objective":"Verify search","features":["Search"],"constraints":["Read-only"]}`)}}
 	r := New(db, fakeFactory{open: func(ctx context.Context) error { once.Do(func() { close(opened) }); <-ctx.Done(); return ctx.Err() }}, Options{ScreenshotDir: t.TempDir(), Provider: provider})
 	done := make(chan struct{})
 	go func() { r.Run(ctx, run.ID, domain.RunAuthorization{}); close(done) }()
@@ -561,7 +564,12 @@ func TestNextScreenshotPathUsesSafeLabelAndSequence(t *testing.T) {
 func TestServerPostReachesTerminalReportWithFakePipeline(t *testing.T) {
 	db, _ := newTestStore(t)
 	provider := &scriptedProvider{responses: []agent.ModelResponse{
-		response(`{"testable":true}`), response(`{"intent":"search"}`), response(`{"pages":[]}`), response(`{"tests":[]}`), response(`{"status":"passed"}`), response(`{"verdict":"passed","summary":"done"}`),
+		response(`{"testable":true}`),
+		response(`{"objective":"Verify search","features":["Search"],"constraints":["Read-only"]}`),
+		response(`{"pages":[{"url":"https://example.com","name":"Example","features":["Search"]}]}`),
+		response(`{"cases":[{"id":"T1","name":"Search","steps":["Open search"],"success":"A result is visible"}]}`),
+		response(`{"cases":[{"id":"T1","status":"failed","steps":["Search was unavailable"],"findings":["Search control missing"],"evidence":[]}],"summary":"Search failed"}`),
+		response(`{"verdict":"failed","summary":"Search could not be verified","findings":[{"severity":"high","title":"Search unavailable","detail":"The requested search flow could not be completed."}],"recommendations":["Restore the search control"]}`),
 	}}
 	r := New(db, fakeFactory{session: &fakeSession{}}, Options{ScreenshotDir: t.TempDir(), Provider: provider})
 	handler, err := server.New(db, r, server.Options{})
@@ -582,12 +590,12 @@ func TestServerPostReachesTerminalReportWithFakePipeline(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		current, err := db.GetRun(created.ID, false)
-		if err == nil && current != nil && current.Status == domain.RunStatusPassed {
+		if err == nil && current != nil && current.Status == domain.RunStatusFailed && current.Report != nil {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("server run did not reach passed terminal report")
+	t.Fatal("server run did not reach a terminal report")
 }
 
 func TestReportParserAcceptsFences(t *testing.T) {
@@ -608,7 +616,7 @@ func TestReportParserFiltersMalformedEntries(t *testing.T) {
 func TestRunnerPersistsTimeoutKind(t *testing.T) {
 	db, _ := newTestStore(t)
 	run := queuedRun(t, db)
-	provider := &scriptedProvider{responses: []agent.ModelResponse{response(`{"testable":true}`), response(`{}`)}}
+	provider := &scriptedProvider{responses: []agent.ModelResponse{response(`{"testable":true}`), response(`{"objective":"Verify search","features":["Search"],"constraints":["Read-only"]}`)}}
 	r := New(db, fakeFactory{open: func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }}, Options{ScreenshotDir: t.TempDir(), Timeout: 10 * time.Millisecond, Provider: provider})
 	r.Run(context.Background(), run.ID, domain.RunAuthorization{})
 	current, err := db.GetRun(run.ID, true)

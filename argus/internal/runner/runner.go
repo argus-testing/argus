@@ -153,7 +153,11 @@ func (r *Runner) execute(ctx context.Context, id string, run *domain.Run, author
 	if testable, reason := parseValidator(validator); !testable {
 		return normalizedReport("", "Validation failed — request is not testable", "", reason), nil
 	}
-	brief, err := r.complete(ctx, spec("comprehender", comprehenderInstruction, r.model, nil, true), id+":comprehender", runMessage(run))
+	var briefContract TestBrief
+	brief, err := r.completeContract(
+		ctx, spec("comprehender", comprehenderInstruction, r.model, nil, true),
+		id+":comprehender", runMessage(run), "", &briefContract, nil,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -171,17 +175,30 @@ func (r *Runner) execute(ctx context.Context, id string, run *domain.Run, author
 	if _, err := session.Navigate(ctx, run.URL); err != nil {
 		return nil, fmt.Errorf("browser: %w", err)
 	}
-	adapter := &browserAdapter{runner: r, runID: id, session: session, policy: runPolicy, secrets: secrets}
+	adapter := &browserAdapter{
+		runner: r, runID: id, session: session, policy: runPolicy, secrets: secrets,
+		evidence: make(EvidenceIndex),
+	}
 	initial, err := adapter.capture(ctx, "Initial page", true)
 	if err != nil {
 		return nil, err
 	}
 
-	explorer, err := r.runAgent(ctx, spec("explorer", explorerInstruction, r.model, browserTools(adapter, true), true), id+":explorer", imageMessage("Target: "+run.URL+"\nGoal: "+run.Instructions+"\nTest Brief:\n"+brief, initial.data), id)
+	var appMapContract AppMap
+	explorer, err := r.completeContract(
+		ctx, spec("explorer", explorerInstruction, r.model, browserTools(adapter, true), true),
+		id+":explorer", imageMessage("Target: "+run.URL+"\nGoal: "+run.Instructions+"\nTest Brief:\n"+brief, initial.data),
+		id, &appMapContract, nil,
+	)
 	if err != nil {
 		return nil, err
 	}
-	plan, err := r.complete(ctx, spec("strategist", strategistInstruction, r.model, nil, true), id+":strategist", textMessage("Target: "+run.URL+"\nGoal: "+run.Instructions+"\nTest Brief:\n"+brief+"\nApp Map:\n"+explorer))
+	var planContract TestPlan
+	plan, err := r.completeContract(
+		ctx, spec("strategist", strategistInstruction, r.model, nil, true),
+		id+":strategist", textMessage("Target: "+run.URL+"\nGoal: "+run.Instructions+"\nTest Brief:\n"+brief+"\nApp Map:\n"+explorer),
+		"", &planContract, nil,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +209,14 @@ func (r *Runner) execute(ctx context.Context, id string, run *domain.Run, author
 	if err != nil {
 		return nil, err
 	}
-	execution, err := r.runAgent(ctx, spec("executor", executorInstruction, r.model, browserTools(adapter, true), true), id+":executor", imageMessage("Target: "+run.URL+"\nGoal: "+run.Instructions+"\nPlan:\n"+plan+"\nApp Map:\n"+explorer, preExecution.data), id)
+	var executionContract ExecutionResult
+	execution, err := r.completeContract(
+		ctx, spec("executor", executorInstruction, r.model, browserTools(adapter, true), true),
+		id+":executor", imageMessage("Target: "+run.URL+"\nGoal: "+run.Instructions+"\nPlan:\n"+plan+"\nApp Map:\n"+explorer, preExecution.data),
+		id, &executionContract, func() error {
+			return validateExecutionAgainstPlan(planContract, executionContract)
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -200,11 +224,18 @@ func (r *Runner) execute(ctx context.Context, id string, run *domain.Run, author
 	if err != nil {
 		return nil, err
 	}
-	critic, err := r.runAgent(ctx, spec("critic", criticInstruction, r.model, browserTools(adapter, false), true), id+":critic", imageMessage("Original User Request: "+run.Instructions+"\nTest Brief: "+brief+"\nApp Map: "+explorer+"\nTest Plan: "+plan+"\nExecutor Results: "+execution, final.data), id)
+	var criticContract CriticResult
+	_, err = r.completeContract(
+		ctx, spec("critic", criticInstruction, r.model, browserTools(adapter, false), true),
+		id+":critic", imageMessage("Original User Request: "+run.Instructions+"\nTest Brief: "+brief+"\nApp Map: "+explorer+"\nTest Plan: "+plan+"\nExecutor Results: "+execution, final.data),
+		id, &criticContract, nil,
+	)
 	if err != nil {
 		return nil, err
 	}
-	return parseReport(critic, plan, execution), nil
+	report := normalizeVerdict(criticContract, executionContract, adapter.evidence)
+	report.Plan = stringPointer(bounded(plan, 12_000))
+	return report, nil
 }
 
 func runMessage(run *domain.Run) *agent.Message {

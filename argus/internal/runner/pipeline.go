@@ -25,6 +25,7 @@ type browserAdapter struct {
 	policy         *policy.Policy
 	secrets        *secretSet
 	groundingCalls int
+	evidence       EvidenceIndex
 }
 
 func (a *browserAdapter) inspect(ctx context.Context, _ map[string]any, _ agent.ToolContext) (any, error) {
@@ -473,6 +474,10 @@ func (a *browserAdapter) captureMode(ctx context.Context, label string, emitEven
 	if _, err := a.runner.store.AddScreenshot(a.runID, publicPath); err != nil {
 		return screenshotCapture{}, err
 	}
+	if a.evidence == nil {
+		a.evidence = make(EvidenceIndex)
+	}
+	a.evidence[publicPath] = Evidence{Kind: "screenshot", Path: publicPath}
 	result := map[string]any{"path": publicPath, "label": bounded(label, 80)}
 	if emitEvent {
 		if err := a.runner.addEvent(a.runID, domain.EventBrowserScreenshot, result); err != nil {
