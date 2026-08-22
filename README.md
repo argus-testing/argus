@@ -77,8 +77,8 @@ From the repository root:
 
 ```bash
 cd frontend && npm install && npm run build && cd ..
-go -C backend-go run ./cmd/argus install-browser
-GEMINI_API_KEY=your-key GEMINI_MODEL=gemini-2.5-flash ARGUS_RUN_TIMEOUT=300 ARGUS_DB_PATH=data/argus.db PORT=8000 go -C backend-go run ./cmd/argus
+go -C argus run ./cmd/argus install-browser
+GEMINI_API_KEY=your-key GEMINI_MODEL=gemini-2.5-flash ARGUS_RUN_TIMEOUT=300 ARGUS_DB_PATH=data/argus.db PORT=8000 go -C argus run ./cmd/argus
 ```
 
 Open <http://localhost:8000>. For frontend hot reload, run `npm run dev` in `frontend/` and the Go server in another terminal.
@@ -99,7 +99,7 @@ Configuration is environment-only:
 Start Argus normally, then install the local stdio adapter from the repository root:
 
 ```bash
-go install ./backend-go/cmd/argus-mcp
+go install ./argus/cmd/argus-mcp
 ```
 
 Ensure Go's bin directory (usually `$(go env GOPATH)/bin`) is on your `PATH`, then configure your MCP client:
@@ -132,18 +132,16 @@ The UI is available at <http://localhost:8000> and persistent data is written to
 ### Development checks
 
 ```bash
-cd backend-go && go test -race ./... && go vet ./...
-cd .. && uv run pytest
-cd frontend && npm run typecheck && npm run lint && npm run build
+cd argus && go test -race ./... && go vet ./...
+cd ../frontend && npm run typecheck && npm run lint && npm run build
 ```
 
 ### Architecture
 
-- `backend-go/cmd/argus`: local REST/WebSocket server and built UI serving
-- `backend-go/internal/runner`: Gemini pipeline, Playwright browser runs, SQLite evidence
-- `backend-go/cmd/argus-mcp`: local stdio MCP adapter for the REST server
+- `argus/cmd/argus`: local REST/WebSocket server and built UI serving
+- `argus/internal/runner`: Gemini pipeline, Playwright browser runs, SQLite evidence
+- `argus/cmd/argus-mcp`: local stdio MCP adapter for the REST server
 - `frontend`: dashboard/composer, live session, history, report, and read-only settings
-- `argus/` and `tests/`: retained Python implementation and tests during the Go transition
 
 All data is local; there is no authentication or multi-user isolation in this release.
 

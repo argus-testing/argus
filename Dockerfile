@@ -6,10 +6,10 @@ COPY frontend/ ./
 RUN npm run build
 
 FROM golang:1.25-bookworm AS go-build
-WORKDIR /src/backend-go
-COPY backend-go/go.mod backend-go/go.sum ./
+WORKDIR /src/argus
+COPY argus/go.mod argus/go.sum ./
 RUN go mod download
-COPY backend-go/ ./
+COPY argus/ ./
 RUN go build -o /out/argus ./cmd/argus \
     && go build -o /out/argus-mcp ./cmd/argus-mcp \
     && go build -o /out/playwright github.com/mxschmitt/playwright-go/cmd/playwright
