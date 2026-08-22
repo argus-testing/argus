@@ -251,11 +251,18 @@ func (a *browserAdapter) screenshot(ctx context.Context, values map[string]any, 
 		}
 		label = text
 	}
+	label = bounded(a.redact(label), 80)
 	capture, err := a.capture(ctx, label, true)
 	if err != nil {
 		return nil, err
 	}
-	return capture.result, nil
+	return agent.ToolOutput{
+		Result: capture.result,
+		Followup: []agent.MessagePart{
+			{Text: &agent.TextPart{Text: "Fresh browser screenshot captured after the requested step."}},
+			{Image: &agent.ImagePart{Data: capture.data, MediaType: "image/png"}},
+		},
+	}, nil
 }
 
 func (a *browserAdapter) checkElementAction(ctx context.Context, reference string, kind policy.ActionKind) error {

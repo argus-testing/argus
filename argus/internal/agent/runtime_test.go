@@ -69,6 +69,62 @@ func TestRuntimeInvokesToolPersistsResultThenCompletes(t *testing.T) {
 	}
 }
 
+func TestRuntimeFeedsToolScreenshotIntoNextModelTurn(t *testing.T) {
+	t.Parallel()
+	provider := &scriptedProvider{responses: []agent.ModelResponse{
+		{Parts: []agent.ResponsePart{{ToolCall: &agent.ToolCallPart{CallID: "shot-1", Name: "screenshot", Arguments: map[string]any{}}}}},
+		{Parts: []agent.ResponsePart{{Text: &agent.TextPart{Text: "observed"}}}},
+	}}
+	sessions := agent.NewInMemorySessionStore()
+	runtime := agent.NewRuntime(map[string]agent.Provider{"fake": provider}, sessions)
+	tool := agent.Tool{
+		Name: "screenshot", InputSchema: json.RawMessage("{\"type\":\"object\"}"),
+		Invoke: func(context.Context, map[string]any, agent.ToolContext) (any, error) {
+			return agent.ToolOutput{
+				Result: map[string]any{"path": "/shot.png"},
+				Followup: []agent.MessagePart{
+					{Text: &agent.TextPart{Text: "Fresh browser screenshot."}},
+					{Image: &agent.ImagePart{Data: []byte("png"), MediaType: "image/png"}},
+				},
+			}, nil
+		},
+	}
+	if err := runtime.Run(context.Background(), agent.AgentSpec{
+		Model: agent.ModelRef{Provider: "fake"}, Tools: []agent.Tool{tool},
+	}, "multimodal", nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	second := provider.requests[1].Messages
+	if len(second) != 3 || second[1].Role != agent.RoleTool || second[2].Role != agent.RoleUser {
+		t.Fatalf("second request messages = %#v", second)
+	}
+	result := second[1].Parts[0].ToolResult
+	if result == nil || !reflect.DeepEqual(result.Result, map[string]any{"path": "/shot.png"}) {
+		t.Fatalf("tool result = %#v", result)
+	}
+	if parts := second[2].Parts; len(parts) != 2 || parts[0].Text == nil || parts[1].Image == nil || string(parts[1].Image.Data) != "png" {
+		t.Fatalf("follow-up parts = %#v", parts)
+	}
+}
+
+func TestRuntimeRejectsExecutableToolFollowupParts(t *testing.T) {
+	t.Parallel()
+	provider := &scriptedProvider{responses: []agent.ModelResponse{{
+		Parts: []agent.ResponsePart{{ToolCall: &agent.ToolCallPart{CallID: "call", Name: "unsafe", Arguments: map[string]any{}}}},
+	}}}
+	runtime := agent.NewRuntime(map[string]agent.Provider{"fake": provider}, agent.NewInMemorySessionStore())
+	tool := agent.Tool{
+		Name: "unsafe", InputSchema: json.RawMessage("{}"),
+		Invoke: func(context.Context, map[string]any, agent.ToolContext) (any, error) {
+			return agent.ToolOutput{Followup: []agent.MessagePart{{ToolCall: &agent.ToolCallPart{Name: "nested"}}}}, nil
+		},
+	}
+	err := runtime.Run(context.Background(), agent.AgentSpec{Model: agent.ModelRef{Provider: "fake"}, Tools: []agent.Tool{tool}}, "unsafe", nil, nil, nil)
+	if !errors.Is(err, agent.ErrInvalidToolFollowup) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestRuntimeRejectsDuplicateTools(t *testing.T) {
 	t.Parallel()
 	runtime := agent.NewRuntime(map[string]agent.Provider{"fake": &scriptedProvider{}}, agent.NewInMemorySessionStore())

@@ -202,11 +202,11 @@ func queuedRun(t *testing.T, db *store.Store) *domain.Run {
 func TestRunnerRunsPublicPipelineAndPersistsSafeBrowserEvents(t *testing.T) {
 	db, databasePath := newTestStore(t)
 	run := queuedRun(t, db)
-	session := &fakeSession{screenshotData: [][]byte{[]byte("initial-shot"), []byte("pre-execution-shot"), []byte("final-shot")}}
+	session := &fakeSession{screenshotData: [][]byte{[]byte("initial-shot"), []byte("pre-execution-shot"), []byte("tool-shot"), []byte("final-shot")}}
 	provider := &scriptedProvider{responses: []agent.ModelResponse{
 		response(`{"testable":true}`), response(`{"intent":"search"}`),
 		tool("inspect_page", map[string]any{}), response(`{"pages":[]}`), response(`{"tests":[]}`),
-		tool("click", map[string]any{"ref": "e1-1"}), response(`{"status":"passed"}`),
+		tool("click", map[string]any{"ref": "e1-1"}), tool("screenshot", map[string]any{"label": "Search result"}), response(`{"status":"passed"}`),
 		response("```json\n{\"verdict\":\"passed\",\"summary\":\"verified\",\"findings\":[{\"severity\":\"info\",\"title\":\"ok\",\"detail\":\"works\"}],\"recommendations\":[\"keep it\"]}\n```"),
 	}}
 	r := New(db, fakeFactory{session: session}, Options{ScreenshotDir: filepath.Join(t.TempDir(), "screenshots"), Provider: provider})
@@ -221,7 +221,7 @@ func TestRunnerRunsPublicPipelineAndPersistsSafeBrowserEvents(t *testing.T) {
 	if session.closed != 1 {
 		t.Fatalf("close calls = %d", session.closed)
 	}
-	if len(provider.names) != 8 {
+	if len(provider.names) != 9 {
 		t.Fatalf("model calls = %d", len(provider.names))
 	}
 	var screenshots, actions, observations int
@@ -244,21 +244,21 @@ func TestRunnerRunsPublicPipelineAndPersistsSafeBrowserEvents(t *testing.T) {
 			}
 		}
 	}
-	if screenshots != 2 || actions != 2 || observations != 2 {
+	if screenshots != 3 || actions != 3 || observations != 3 {
 		t.Fatalf("events screenshots/actions/observations = %d/%d/%d", screenshots, actions, observations)
 	}
 	for _, test := range []struct {
 		index int
 		image string
-	}{{2, "initial-shot"}, {5, "pre-execution-shot"}, {7, "final-shot"}} {
-		parts := provider.requests[test.index].Messages[0].Parts
-		if len(parts) != 2 || parts[1].Image == nil || parts[1].Image.MediaType != "image/png" || string(parts[1].Image.Data) != test.image {
-			t.Fatalf("request %d image = %#v", test.index, parts)
+	}{{2, "initial-shot"}, {5, "pre-execution-shot"}, {7, "tool-shot"}, {8, "final-shot"}} {
+		image := lastImage(provider.requests[test.index].Messages)
+		if image == nil || image.MediaType != "image/png" || string(image.Data) != test.image {
+			t.Fatalf("request %d image = %#v", test.index, image)
 		}
 	}
 	for _, event := range current.Events {
 		encoded, _ := json.Marshal(event)
-		for _, value := range []string{"private page text", "private button", base64.StdEncoding.EncodeToString([]byte("initial-shot")), base64.StdEncoding.EncodeToString([]byte("pre-execution-shot")), base64.StdEncoding.EncodeToString([]byte("final-shot"))} {
+		for _, value := range []string{"private page text", "private button", base64.StdEncoding.EncodeToString([]byte("initial-shot")), base64.StdEncoding.EncodeToString([]byte("pre-execution-shot")), base64.StdEncoding.EncodeToString([]byte("tool-shot")), base64.StdEncoding.EncodeToString([]byte("final-shot"))} {
 			if strings.Contains(string(encoded), value) {
 				t.Fatalf("event persisted private data: %s", encoded)
 			}
@@ -270,9 +270,21 @@ func TestRunnerRunsPublicPipelineAndPersistsSafeBrowserEvents(t *testing.T) {
 	}
 	defer reader.Close()
 	var count int
-	if err := reader.QueryRow("SELECT COUNT(*) FROM screenshots WHERE run_id = ?", run.ID).Scan(&count); err != nil || count != 3 {
+	if err := reader.QueryRow("SELECT COUNT(*) FROM screenshots WHERE run_id = ?", run.ID).Scan(&count); err != nil || count != 4 {
 		t.Fatalf("screenshots = %d, %v", count, err)
 	}
+}
+
+func lastImage(messages []agent.Message) *agent.ImagePart {
+	for messageIndex := len(messages) - 1; messageIndex >= 0; messageIndex-- {
+		parts := messages[messageIndex].Parts
+		for partIndex := len(parts) - 1; partIndex >= 0; partIndex-- {
+			if parts[partIndex].Image != nil {
+				return parts[partIndex].Image
+			}
+		}
+	}
+	return nil
 }
 
 func TestRunnerRejectsTypeTextWithoutElementReference(t *testing.T) {

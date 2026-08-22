@@ -88,6 +88,13 @@ type Tool struct {
 	Invoke      func(context.Context, map[string]any, ToolContext) (any, error)
 }
 
+// ToolOutput separates the serializable function response from optional
+// multimodal observations that should be supplied as a normal user message.
+type ToolOutput struct {
+	Result   any
+	Followup []MessagePart
+}
+
 type ModelRequest struct {
 	Model             ModelRef
 	SystemInstruction string

@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 var (
-	ErrDuplicateTool   = errors.New("duplicate tool")
-	ErrUnknownProvider = errors.New("unknown provider")
-	ErrUnknownTool     = errors.New("unknown tool")
-	ErrInvalidResponse = errors.New("invalid provider response")
+	ErrDuplicateTool       = errors.New("duplicate tool")
+	ErrUnknownProvider     = errors.New("unknown provider")
+	ErrUnknownTool         = errors.New("unknown tool")
+	ErrInvalidResponse     = errors.New("invalid provider response")
+	ErrInvalidToolFollowup = errors.New("invalid tool follow-up")
 )
 
 type ModelCallLimitError struct {
@@ -172,6 +175,10 @@ func (r *Runtime) Run(ctx context.Context, spec AgentSpec, sessionID string, mes
 			if err != nil {
 				return err
 			}
+			result, followup, err := splitToolOutput(result)
+			if err != nil {
+				return err
+			}
 			toolResult := ToolResultPart{CallID: call.CallID, Name: call.Name, Result: result}
 			if err := r.sessions.Append(ctx, sessionID, Message{Role: RoleTool, Parts: []MessagePart{{ToolResult: &toolResult}}}); err != nil {
 				return err
@@ -179,9 +186,77 @@ func (r *Runtime) Run(ctx context.Context, spec AgentSpec, sessionID string, mes
 			if err := emitEvent(emit, ToolResultEvent{Result: toolResult}); err != nil {
 				return err
 			}
+			if len(followup) > 0 {
+				if err := r.sessions.Append(ctx, sessionID, Message{Role: RoleUser, Parts: followup}); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return &ModelCallLimitError{Limit: r.maxModelCalls}
+}
+
+func splitToolOutput(value any) (any, []MessagePart, error) {
+	var output ToolOutput
+	switch value := value.(type) {
+	case ToolOutput:
+		output = value
+	case *ToolOutput:
+		if value == nil {
+			return nil, nil, fmt.Errorf("%w: output is nil", ErrInvalidToolFollowup)
+		}
+		output = *value
+	default:
+		return value, nil, nil
+	}
+	followup, err := validateFollowup(output.Followup)
+	if err != nil {
+		return nil, nil, err
+	}
+	return output.Result, followup, nil
+}
+
+func validateFollowup(parts []MessagePart) ([]MessagePart, error) {
+	if len(parts) > 8 {
+		return nil, fmt.Errorf("%w: too many parts", ErrInvalidToolFollowup)
+	}
+	validated := make([]MessagePart, len(parts))
+	for index, part := range parts {
+		kinds := 0
+		if part.Text != nil {
+			kinds++
+		}
+		if part.Image != nil {
+			kinds++
+		}
+		if part.Audio != nil {
+			kinds++
+		}
+		if part.ToolCall != nil || part.ToolResult != nil {
+			return nil, fmt.Errorf("%w: executable parts are not allowed", ErrInvalidToolFollowup)
+		}
+		if kinds != 1 {
+			return nil, fmt.Errorf("%w: each part must contain exactly one observation", ErrInvalidToolFollowup)
+		}
+		switch {
+		case part.Text != nil:
+			if !utf8.ValidString(part.Text.Text) || utf8.RuneCountInString(part.Text.Text) > 100_000 {
+				return nil, fmt.Errorf("%w: text is invalid", ErrInvalidToolFollowup)
+			}
+			validated[index].Text = &TextPart{Text: part.Text.Text}
+		case part.Image != nil:
+			if len(part.Image.Data) == 0 || len(part.Image.Data) > 10<<20 || !strings.HasPrefix(part.Image.MediaType, "image/") {
+				return nil, fmt.Errorf("%w: image is invalid", ErrInvalidToolFollowup)
+			}
+			validated[index].Image = &ImagePart{Data: append([]byte(nil), part.Image.Data...), MediaType: part.Image.MediaType}
+		case part.Audio != nil:
+			if len(part.Audio.Data) == 0 || len(part.Audio.Data) > 10<<20 || !strings.HasPrefix(part.Audio.MediaType, "audio/") {
+				return nil, fmt.Errorf("%w: audio is invalid", ErrInvalidToolFollowup)
+			}
+			validated[index].Audio = &AudioPart{Data: append([]byte(nil), part.Audio.Data...), MediaType: part.Audio.MediaType}
+		}
+	}
+	return validated, nil
 }
 
 func (r *Runtime) lockSession(id string) func() {
