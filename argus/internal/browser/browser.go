@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/ace-foundry/argus-testing/argus/internal/server"
@@ -21,16 +23,27 @@ const (
 // Factory creates isolated browser sessions. Implementations must not reuse a
 // BrowserContext between runs.
 type Factory interface {
-	Open(context.Context) (Session, error)
+	Open(context.Context, ...SessionOptions) (Session, error)
+}
+
+type SessionOptions struct {
+	AllowMutations  bool
+	AllowNavigation func(string) bool
+}
+
+type InputValue struct {
+	Text      string
+	Sensitive bool
 }
 
 // Session is a single run's browser context and page.
 type Session interface {
 	Navigate(context.Context, string) (Navigation, error)
 	Inspect(context.Context) (PageSnapshot, error)
+	Element(context.Context, string) (Element, error)
 	Click(context.Context, string) (ActionResult, error)
-	Type(context.Context, string, string) (ActionResult, error)
-	FillForm(context.Context, map[string]string) (ActionResult, error)
+	Type(context.Context, string, InputValue) (ActionResult, error)
+	FillForm(context.Context, map[string]InputValue) (ActionResult, error)
 	Submit(context.Context, string) (ActionResult, error)
 	Select(context.Context, string, string) (ActionResult, error)
 	Press(context.Context, string) (ActionResult, error)
@@ -60,9 +73,16 @@ func Install() error {
 	return playwright.Install(&playwright.RunOptions{Browsers: []string{"chromium"}})
 }
 
-func (playwrightFactory) Open(ctx context.Context) (Session, error) {
+func (playwrightFactory) Open(ctx context.Context, requested ...SessionOptions) (Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if len(requested) > 1 {
+		return nil, errors.New("at most one browser session option is allowed")
+	}
+	options := SessionOptions{}
+	if len(requested) == 1 {
+		options = requested[0]
 	}
 	playwrightInstance, err := playwright.Run()
 	if err != nil {
@@ -91,6 +111,10 @@ func (playwrightFactory) Open(ctx context.Context) (Session, error) {
 		return nil, errors.Join(err, contextInstance.Close(), instance.Close(), playwrightInstance.Stop())
 	}
 	session := &playwrightSession{playwright: playwrightInstance, browser: instance, context: contextInstance, page: page, done: make(chan struct{}), elements: newElementRegistry()}
+	if err := session.installRequestPolicy(options); err != nil {
+		session.close()
+		return nil, errors.Join(err, session.closeErr)
+	}
 	session.observePage()
 	go func() {
 		select {
@@ -103,17 +127,20 @@ func (playwrightFactory) Open(ctx context.Context) (Session, error) {
 }
 
 type playwrightSession struct {
-	playwright *playwright.Playwright
-	browser    playwright.Browser
-	context    playwright.BrowserContext
-	page       playwright.Page
-	closeOnce  sync.Once
-	closeErr   error
-	done       chan struct{}
-	elements   *elementRegistry
-	eventsMu   sync.Mutex
-	console    []string
-	network    []NetworkError
+	playwright        *playwright.Playwright
+	browser           playwright.Browser
+	context           playwright.BrowserContext
+	page              playwright.Page
+	closeOnce         sync.Once
+	closeErr          error
+	done              chan struct{}
+	elements          *elementRegistry
+	eventsMu          sync.Mutex
+	console           []string
+	network           []NetworkError
+	policyMu          sync.Mutex
+	blockedNavigation bool
+	lastAuthorizedURL string
 }
 
 func (s *playwrightSession) Navigate(ctx context.Context, target string) (Navigation, error) {
@@ -125,7 +152,13 @@ func (s *playwrightSession) Navigate(ctx context.Context, target string) (Naviga
 	}
 	s.elements.invalidate()
 	if _, err := s.page.Goto(target, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateDomcontentloaded, Timeout: playwright.Float(navigationTimeout)}); err != nil {
+		if s.restoreBlockedNavigation() {
+			return Navigation{}, ErrNavigationBlocked
+		}
 		return Navigation{}, err
+	}
+	if s.restoreBlockedNavigation() {
+		return Navigation{}, ErrNavigationBlocked
 	}
 	if err := ctx.Err(); err != nil {
 		return Navigation{}, err
@@ -134,6 +167,7 @@ func (s *playwrightSession) Navigate(ctx context.Context, target string) (Naviga
 	if err != nil {
 		return Navigation{}, err
 	}
+	s.rememberAuthorizedURL(s.page.URL())
 	return Navigation{URL: server.SanitizeURL(s.page.URL()), Title: title}, nil
 }
 
@@ -172,7 +206,7 @@ func (s *playwrightSession) Inspect(ctx context.Context) (PageSnapshot, error) {
 	}
 	targets := make([]elementTarget, len(payload.Elements))
 	for index, element := range payload.Elements {
-		targets[index] = elementTarget{selector: element.Selector, mutating: element.Mutating, destructive: element.Destructive}
+		targets[index] = elementTarget{selector: element.Selector, element: element.Element}
 	}
 	references := s.elements.replace(targets)
 	elements := make([]Element, len(payload.Elements))
@@ -181,6 +215,13 @@ func (s *playwrightSession) Inspect(ctx context.Context) (PageSnapshot, error) {
 		elements[index].Ref = references[index]
 	}
 	return PageSnapshot{URL: server.SanitizeURL(s.page.URL()), Title: limit(payload.Title, 1_000), Text: limit(payload.Text, 12_000), Width: payload.Width, Height: payload.Height, Elements: elements}, nil
+}
+
+func (s *playwrightSession) Element(ctx context.Context, reference string) (Element, error) {
+	if err := ctx.Err(); err != nil {
+		return Element{}, err
+	}
+	return s.elements.element(reference)
 }
 
 func (s *playwrightSession) Click(ctx context.Context, reference string) (ActionResult, error) {
@@ -197,7 +238,7 @@ func (s *playwrightSession) Click(ctx context.Context, reference string) (Action
 	return s.result(ctx)
 }
 
-func (s *playwrightSession) Type(ctx context.Context, reference, text string) (ActionResult, error) {
+func (s *playwrightSession) Type(ctx context.Context, reference string, value InputValue) (ActionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ActionResult{}, err
 	}
@@ -205,13 +246,16 @@ func (s *playwrightSession) Type(ctx context.Context, reference, text string) (A
 	if err != nil {
 		return ActionResult{}, err
 	}
-	if err := locator.Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(actionTimeout)}); err != nil {
+	if _, err := locator.Evaluate("(element, sensitive) => { if (sensitive) element.setAttribute('data-argus-sensitive', 'true'); else element.removeAttribute('data-argus-sensitive'); }", value.Sensitive); err != nil {
+		return ActionResult{}, err
+	}
+	if err := locator.Fill(value.Text, playwright.LocatorFillOptions{Timeout: playwright.Float(actionTimeout)}); err != nil {
 		return ActionResult{}, err
 	}
 	return s.result(ctx)
 }
 
-func (s *playwrightSession) FillForm(ctx context.Context, values map[string]string) (ActionResult, error) {
+func (s *playwrightSession) FillForm(ctx context.Context, values map[string]InputValue) (ActionResult, error) {
 	references := make([]string, 0, len(values))
 	for reference := range values {
 		references = append(references, reference)
@@ -345,11 +389,36 @@ func (s *playwrightSession) Screenshot(ctx context.Context, path string) error {
 		return err
 	}
 	fullPage := true
-	_, err := s.page.Screenshot(playwright.PageScreenshotOptions{Path: &path, FullPage: &fullPage, Timeout: playwright.Float(navigationTimeout)})
+	maskColor := "#FF00FF"
+	mask := s.page.Locator("input[type=\"password\"], [data-argus-sensitive=\"true\"]")
+	_, err := s.page.Screenshot(playwright.PageScreenshotOptions{
+		Path: &path, FullPage: &fullPage, Timeout: playwright.Float(navigationTimeout),
+		Mask: []playwright.Locator{mask}, MaskColor: &maskColor,
+	})
 	if err != nil {
 		return err
 	}
 	return ctx.Err()
+}
+
+func (s *playwrightSession) installRequestPolicy(options SessionOptions) error {
+	return s.page.Route("**/*", func(route playwright.Route) {
+		request := route.Request()
+		method := strings.ToUpper(request.Method())
+		mutationAllowed := options.AllowMutations || method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
+		navigationAllowed := !request.IsNavigationRequest() || options.AllowNavigation == nil || options.AllowNavigation(request.URL())
+		if mutationAllowed && navigationAllowed {
+			_ = route.Continue()
+			return
+		}
+		s.recordNetwork(NetworkError{Method: method, URL: server.SanitizeURL(request.URL()), Status: 0})
+		if request.IsNavigationRequest() {
+			s.policyMu.Lock()
+			s.blockedNavigation = true
+			s.policyMu.Unlock()
+		}
+		_ = route.Abort("blockedbyclient")
+	})
 }
 
 func (s *playwrightSession) Close() error {
@@ -369,7 +438,38 @@ func (s *playwrightSession) result(ctx context.Context) (ActionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ActionResult{}, err
 	}
+	if s.restoreBlockedNavigation() {
+		return ActionResult{}, ErrNavigationBlocked
+	}
+	s.rememberAuthorizedURL(s.page.URL())
 	return ActionResult{URL: server.SanitizeURL(s.page.URL())}, nil
+}
+
+func (s *playwrightSession) rememberAuthorizedURL(value string) {
+	if value == "" || strings.HasPrefix(value, "chrome-error:") {
+		return
+	}
+	s.policyMu.Lock()
+	s.lastAuthorizedURL = value
+	s.policyMu.Unlock()
+}
+
+func (s *playwrightSession) restoreBlockedNavigation() bool {
+	s.policyMu.Lock()
+	if !s.blockedNavigation {
+		s.policyMu.Unlock()
+		return false
+	}
+	s.blockedNavigation = false
+	target := s.lastAuthorizedURL
+	s.policyMu.Unlock()
+	if target != "" {
+		_, _ = s.page.Goto(target, playwright.PageGotoOptions{
+			WaitUntil: playwright.WaitUntilStateDomcontentloaded,
+			Timeout:   playwright.Float(navigationTimeout),
+		})
+	}
+	return true
 }
 
 func (s *playwrightSession) observePage() {

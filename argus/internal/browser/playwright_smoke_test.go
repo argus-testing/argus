@@ -2,16 +2,158 @@ package browser_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ace-foundry/argus-testing/argus/internal/browser"
 )
+
+func TestPlaywrightRequestPolicyBlocksUnauthorizedTraffic(t *testing.T) {
+	if os.Getenv("ARGUS_PLAYWRIGHT_SMOKE") != "1" {
+		t.Skip("set ARGUS_PLAYWRIGHT_SMOKE=1 after running argus install-browser")
+	}
+	var posts atomic.Int32
+	var unauthorizedHits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		unauthorizedHits.Add(1)
+		_, _ = fmt.Fprint(w, "unauthorized")
+	}))
+	defer target.Close()
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/save" {
+			posts.Add(1)
+			_, _ = fmt.Fprint(w, "saved")
+			return
+		}
+		_, _ = fmt.Fprintf(w, "<!doctype html><button onclick=\"fetch('/save',{method:'POST'}).then(()=>this.textContent='saved').catch(()=>this.textContent='blocked')\">Save</button><a href=%q>Leave</a>", target.URL)
+	}))
+	defer app.Close()
+
+	session, err := browser.NewPlaywrightFactory().Open(context.Background(), browser.SessionOptions{
+		AllowNavigation: func(value string) bool { return strings.HasPrefix(value, app.URL) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if _, err := session.Navigate(context.Background(), app.URL); err != nil {
+		t.Fatal(err)
+	}
+	page, err := session.Inspect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Click(context.Background(), elementRef(t, page, "Save")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Wait(context.Background(), browser.WaitCondition{Text: "blocked", TimeoutMillis: 1_000}); err != nil {
+		t.Fatal(err)
+	}
+	if posts.Load() != 0 {
+		t.Fatalf("read-only session sent %d POST requests", posts.Load())
+	}
+	page, err = session.Inspect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Click(context.Background(), elementRef(t, page, "Leave")); !errors.Is(err, browser.ErrNavigationBlocked) {
+		t.Fatalf("cross-origin navigation error = %v", err)
+	}
+	after, err := session.Inspect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unauthorizedHits.Load() != 0 || !strings.HasPrefix(after.URL, app.URL) {
+		t.Fatalf("unauthorized navigation reached target: hits=%d url=%q", unauthorizedHits.Load(), after.URL)
+	}
+	if networkErrors := mustNetworkErrors(t, session); len(networkErrors) == 0 {
+		t.Fatal("blocked requests were not observable")
+	}
+
+	mutatingSession, err := browser.NewPlaywrightFactory().Open(context.Background(), browser.SessionOptions{
+		AllowMutations:  true,
+		AllowNavigation: func(value string) bool { return strings.HasPrefix(value, app.URL) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mutatingSession.Close()
+	if _, err := mutatingSession.Navigate(context.Background(), app.URL); err != nil {
+		t.Fatal(err)
+	}
+	page, err = mutatingSession.Inspect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mutatingSession.Click(context.Background(), elementRef(t, page, "Save")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mutatingSession.Wait(context.Background(), browser.WaitCondition{Text: "saved", TimeoutMillis: 1_000}); err != nil {
+		t.Fatal(err)
+	}
+	if posts.Load() != 1 {
+		t.Fatalf("mutation-authorized session sent %d POST requests", posts.Load())
+	}
+}
+
+func TestPlaywrightMasksSensitiveInputInScreenshots(t *testing.T) {
+	if os.Getenv("ARGUS_PLAYWRIGHT_SMOKE") != "1" {
+		t.Skip("set ARGUS_PLAYWRIGHT_SMOKE=1 after running argus install-browser")
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, "<style>body{margin:0}input{position:absolute;left:10px;top:10px;width:180px;height:30px;background:white}</style><input aria-label=\"API token\">")
+	}))
+	defer server.Close()
+	session, err := browser.NewPlaywrightFactory().Open(context.Background(), browser.SessionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if _, err := session.Navigate(context.Background(), server.URL); err != nil {
+		t.Fatal(err)
+	}
+	page, err := session.Inspect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Type(context.Background(), elementRef(t, page, "API token"), browser.InputValue{Text: "private-token", Sensitive: true}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "masked.png")
+	if err := session.Screenshot(context.Background(), path); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	image, err := png.Decode(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	red, green, blue, _ := image.At(50, 25).RGBA()
+	if red < 0xd000 || green > 0x2000 || blue < 0xd000 {
+		t.Fatalf("sensitive mask pixel = %#x %#x %#x", red, green, blue)
+	}
+}
+
+func mustNetworkErrors(t *testing.T, session browser.Session) []browser.NetworkError {
+	t.Helper()
+	values, err := session.NetworkErrors(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return values
+}
 
 func TestPlaywrightSemanticInteractionSurface(t *testing.T) {
 	if os.Getenv("ARGUS_PLAYWRIGHT_SMOKE") != "1" {
@@ -41,7 +183,7 @@ func TestPlaywrightSemanticInteractionSurface(t *testing.T) {
 	search := elementRef(t, page, "Search")
 	batch := elementRef(t, page, "Batch")
 	show := elementRef(t, page, "Show")
-	if _, err := session.Type(context.Background(), search, "Airbnb"); err != nil {
+	if _, err := session.Type(context.Background(), search, browser.InputValue{Text: "Airbnb"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := session.Select(context.Background(), batch, "Winter 2024"); err != nil {
@@ -88,7 +230,8 @@ func TestPlaywrightFormAndDiagnosticSurface(t *testing.T) {
 <label for="keys">Keys</label><input id="keys" onkeydown="document.querySelector('#pressed').textContent=event.key">
 <span id="pressed"></span>
 <button id="console" onclick="console.error('fixture console failure')">Console error</button>
-<button id="network" onclick="fetch('/missing')">Network error</button>
+<button id="network" onclick="fetch('/missing').finally(()=>document.querySelector('#network-state').textContent='network done')">Network error</button>
+<span id="network-state"></span>
 <button id="point" style="position:fixed;right:10px;bottom:10px;width:100px;height:50px" onclick="this.textContent='Point clicked'">Point target</button>
 </body></html>`)
 		}
@@ -114,10 +257,10 @@ func TestPlaywrightFormAndDiagnosticSurface(t *testing.T) {
 	networkButton := elementRef(t, page, "Network error")
 	submit := elementRef(t, page, "Send")
 
-	if _, err := session.FillForm(context.Background(), map[string]string{last: "Lovelace", first: "Ada"}); err != nil {
+	if _, err := session.FillForm(context.Background(), map[string]browser.InputValue{last: {Text: "Lovelace"}, first: {Text: "Ada"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.Type(context.Background(), keys, "x"); err != nil {
+	if _, err := session.Type(context.Background(), keys, browser.InputValue{Text: "x"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := session.Press(context.Background(), "ArrowLeft"); err != nil {
@@ -129,7 +272,7 @@ func TestPlaywrightFormAndDiagnosticSurface(t *testing.T) {
 	if _, err := session.Click(context.Background(), networkButton); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.Wait(context.Background(), browser.WaitCondition{Text: "ArrowLeft", TimeoutMillis: 1_000}); err != nil {
+	if _, err := session.Wait(context.Background(), browser.WaitCondition{Text: "network done", TimeoutMillis: 1_000}); err != nil {
 		t.Fatal(err)
 	}
 	consoleErrors, err := session.ConsoleErrors(context.Background())

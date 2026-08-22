@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -19,6 +20,7 @@ import (
 	"github.com/ace-foundry/argus-testing/argus/internal/agent"
 	"github.com/ace-foundry/argus-testing/argus/internal/browser"
 	"github.com/ace-foundry/argus-testing/argus/internal/domain"
+	"github.com/ace-foundry/argus-testing/argus/internal/policy"
 	"github.com/ace-foundry/argus-testing/argus/internal/server"
 	"github.com/ace-foundry/argus-testing/argus/internal/store"
 )
@@ -28,7 +30,7 @@ type fakeFactory struct {
 	open    func(context.Context) error
 }
 
-func (f fakeFactory) Open(ctx context.Context) (browser.Session, error) {
+func (f fakeFactory) Open(ctx context.Context, _ ...browser.SessionOptions) (browser.Session, error) {
 	if f.open != nil {
 		if err := f.open(ctx); err != nil {
 			return nil, err
@@ -46,6 +48,11 @@ type fakeSession struct {
 	screenshotData  [][]byte
 	screenshotCount int
 	calls           []string
+	elements        map[string]browser.Element
+	typedRef        string
+	typedValue      string
+	typedSensitive  bool
+	inspectText     string
 }
 
 func (s *fakeSession) Navigate(_ context.Context, url string) (browser.Navigation, error) {
@@ -54,15 +61,65 @@ func (s *fakeSession) Navigate(_ context.Context, url string) (browser.Navigatio
 }
 func (s *fakeSession) Inspect(context.Context) (browser.PageSnapshot, error) {
 	s.calls = append(s.calls, "inspect")
-	return browser.PageSnapshot{URL: "https://example.com", Title: "Secret title", Text: "private page text", Elements: []browser.Element{{Ref: "e1-1", Name: "private button"}}}, nil
+	text := s.inspectText
+	if text == "" {
+		text = "private page text"
+	}
+	return browser.PageSnapshot{URL: "https://example.com", Title: "Secret title", Text: text, Elements: []browser.Element{{Ref: "e1-1", Name: "private button"}}}, nil
+}
+func (s *fakeSession) Element(_ context.Context, reference string) (browser.Element, error) {
+	if element, ok := s.elements[reference]; ok {
+		element.Ref = reference
+		return element, nil
+	}
+	return browser.Element{Ref: reference}, nil
 }
 func (s *fakeSession) Click(context.Context, string) (browser.ActionResult, error) {
 	s.calls = append(s.calls, "click")
 	return browser.ActionResult{URL: "https://example.com"}, nil
 }
-func (s *fakeSession) Type(context.Context, string, string) (browser.ActionResult, error) {
+func (s *fakeSession) Type(_ context.Context, reference string, value browser.InputValue) (browser.ActionResult, error) {
 	s.calls = append(s.calls, "type")
+	s.typedRef = reference
+	s.typedValue = value.Text
+	s.typedSensitive = value.Sensitive
 	return browser.ActionResult{URL: "https://example.com"}, nil
+}
+func (s *fakeSession) FillForm(_ context.Context, _ map[string]browser.InputValue) (browser.ActionResult, error) {
+	s.calls = append(s.calls, "fill_form")
+	return browser.ActionResult{URL: "https://example.com"}, nil
+}
+func (s *fakeSession) Submit(context.Context, string) (browser.ActionResult, error) {
+	s.calls = append(s.calls, "submit")
+	return browser.ActionResult{URL: "https://example.com"}, nil
+}
+func (s *fakeSession) Select(context.Context, string, string) (browser.ActionResult, error) {
+	s.calls = append(s.calls, "select")
+	return browser.ActionResult{URL: "https://example.com"}, nil
+}
+func (s *fakeSession) Press(context.Context, string) (browser.ActionResult, error) {
+	s.calls = append(s.calls, "press")
+	return browser.ActionResult{URL: "https://example.com"}, nil
+}
+func (s *fakeSession) Scroll(context.Context, int) (browser.ActionResult, error) {
+	s.calls = append(s.calls, "scroll")
+	return browser.ActionResult{URL: "https://example.com"}, nil
+}
+func (s *fakeSession) Resize(context.Context, int, int) (browser.ActionResult, error) {
+	s.calls = append(s.calls, "resize")
+	return browser.ActionResult{URL: "https://example.com"}, nil
+}
+func (s *fakeSession) Wait(context.Context, browser.WaitCondition) (browser.ActionResult, error) {
+	s.calls = append(s.calls, "wait")
+	return browser.ActionResult{URL: "https://example.com"}, nil
+}
+func (s *fakeSession) ConsoleErrors(context.Context) ([]string, error) {
+	s.calls = append(s.calls, "console")
+	return []string{"console failure"}, nil
+}
+func (s *fakeSession) NetworkErrors(context.Context) ([]browser.NetworkError, error) {
+	s.calls = append(s.calls, "network")
+	return []browser.NetworkError{{Method: "GET", URL: "https://example.com/missing", Status: 404}}, nil
 }
 func (s *fakeSession) Screenshot(_ context.Context, path string) error {
 	s.calls = append(s.calls, "screenshot")
@@ -218,13 +275,13 @@ func TestRunnerRunsPublicPipelineAndPersistsSafeBrowserEvents(t *testing.T) {
 	}
 }
 
-func TestRunnerRejectsUnadvertisedTypeTextWithoutFill(t *testing.T) {
+func TestRunnerRejectsTypeTextWithoutElementReference(t *testing.T) {
 	db, _ := newTestStore(t)
 	run := queuedRun(t, db)
 	session := &fakeSession{}
 	provider := &scriptedProvider{responses: []agent.ModelResponse{
 		response(`{"testable":true}`), response(`{"intent":"search"}`),
-		tool("type_text", map[string]any{"selector": "#input", "text": "credential"}),
+		tool("type_text", map[string]any{"text": "credential"}),
 	}}
 	r := New(db, fakeFactory{session: session}, Options{ScreenshotDir: t.TempDir(), Provider: provider})
 	r.Run(context.Background(), run.ID, domain.RunAuthorization{})
@@ -244,14 +301,19 @@ func TestRunnerRejectsUnadvertisedTypeTextWithoutFill(t *testing.T) {
 	if len(provider.requests) != 3 {
 		t.Fatalf("model requests = %d", len(provider.requests))
 	}
+	advertised := false
 	for _, browserTool := range provider.requests[2].Tools {
-		if browserTool.Name == "type_text" {
-			t.Fatal("type_text was advertised to the model")
-		}
+		advertised = advertised || browserTool.Name == "type_text"
+	}
+	if !advertised {
+		t.Fatal("type_text was not advertised to the model")
 	}
 	for _, event := range current.Events {
 		if event.Type == domain.EventBrowserAction && event.Data["tool"] == "type_text" {
-			t.Fatalf("type_text event persisted: %#v", event)
+			encoded, _ := json.Marshal(event)
+			if bytes.Contains(encoded, []byte("credential")) {
+				t.Fatalf("type_text event leaked input: %s", encoded)
+			}
 		}
 	}
 }
@@ -261,12 +323,132 @@ func TestBrowserAdapterReturnsClickAndNavigateObservations(t *testing.T) {
 	ctx := context.Background()
 
 	navigate, err := adapter.navigate(ctx, map[string]any{"url": "https://example.com/a?view=all"}, agent.ToolContext{})
-	if err != nil || !reflect.DeepEqual(navigate, map[string]any{"url": "https://example.com/a?view=all", "title": "Example"}) {
+	navigation, _ := navigate.(map[string]any)
+	if err != nil || navigation["action"] != "navigated" || navigation["url"] != "https://example.com/a?view=all" || navigation["snapshot"] == nil {
 		t.Fatalf("navigate = %#v, %v", navigate, err)
 	}
 	click, err := adapter.click(ctx, map[string]any{"ref": "e1-1"}, agent.ToolContext{})
-	if err != nil || !reflect.DeepEqual(click, map[string]any{"url": "https://example.com", "result": "clicked"}) {
+	clicked, _ := click.(map[string]any)
+	if err != nil || clicked["action"] != "clicked" || clicked["url"] != "https://example.com" || clicked["snapshot"] == nil {
 		t.Fatalf("click = %#v, %v", click, err)
+	}
+}
+
+func TestTypeTextResolvesBindingAndReturnsOnlyRedactedMetadata(t *testing.T) {
+	secrets, err := newSecretSet(map[string]string{"login_password": "secret-value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secrets.Close()
+	runPolicy, err := policy.New("https://example.com", domain.RunAuthorization{AllowMutations: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := &fakeSession{elements: map[string]browser.Element{"e1-1": {Mutating: true}}, inspectText: "signed in with secret-value"}
+	adapter := &browserAdapter{session: session, policy: runPolicy, secrets: secrets}
+	result, err := adapter.typeText(context.Background(), map[string]any{"ref": "e1-1", "secret": "login_password"}, agent.ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.typedRef != "e1-1" || session.typedValue != "secret-value" || !session.typedSensitive {
+		t.Fatalf("typed = %q, %q, sensitive=%v", session.typedRef, session.typedValue, session.typedSensitive)
+	}
+	encoded, _ := json.Marshal(result)
+	if bytes.Contains(encoded, []byte("secret-value")) || bytes.Contains(encoded, []byte("login_password")) {
+		t.Fatalf("tool result leaked secret metadata: %s", encoded)
+	}
+}
+
+func TestBrowserAdapterEnforcesNavigationAndActionPolicy(t *testing.T) {
+	runPolicy, err := policy.New("https://example.com", domain.RunAuthorization{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := &fakeSession{elements: map[string]browser.Element{
+		"safe":     {},
+		"mutating": {Mutating: true},
+	}}
+	adapter := &browserAdapter{session: session, policy: runPolicy}
+	if _, err := adapter.click(context.Background(), map[string]any{"ref": "safe"}, agent.ToolContext{}); err != nil {
+		t.Fatalf("safe click: %v", err)
+	}
+	if _, err := adapter.click(context.Background(), map[string]any{"ref": "mutating"}, agent.ToolContext{}); !errors.Is(err, policy.ErrMutationDenied) {
+		t.Fatalf("mutating click error = %v", err)
+	}
+	if _, err := adapter.navigate(context.Background(), map[string]any{"url": "https://other.example/path"}, agent.ToolContext{}); !errors.Is(err, policy.ErrOriginDenied) {
+		t.Fatalf("navigation error = %v", err)
+	}
+	if got := strings.Join(session.calls, ","); got != "click,inspect" {
+		t.Fatalf("browser calls = %q", got)
+	}
+}
+
+func TestExecutorAdvertisesCompleteSemanticToolSurface(t *testing.T) {
+	tools := browserTools(&browserAdapter{}, true)
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name)
+	}
+	want := []string{
+		"inspect_page", "click", "type_text", "fill_form", "submit_form",
+		"select_option", "press_key", "scroll", "resize_viewport", "wait_for",
+		"console_errors", "network_errors", "navigate", "screenshot",
+	}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("tool names = %#v, want %#v", names, want)
+	}
+}
+
+func TestBrowserAdapterWiresCompleteSemanticToolSurface(t *testing.T) {
+	runPolicy, err := policy.New("https://example.com", domain.RunAuthorization{AllowMutations: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		values map[string]any
+		invoke func(*browserAdapter, context.Context, map[string]any) (any, error)
+		calls  string
+	}{
+		{"fill form", map[string]any{"fields": []any{map[string]any{"ref": "e1-1", "text": "Ada"}}}, func(a *browserAdapter, ctx context.Context, values map[string]any) (any, error) {
+			return a.fillForm(ctx, values, agent.ToolContext{})
+		}, "fill_form,inspect"},
+		{"submit", map[string]any{"ref": "e1-1"}, func(a *browserAdapter, ctx context.Context, values map[string]any) (any, error) {
+			return a.submitForm(ctx, values, agent.ToolContext{})
+		}, "submit,inspect"},
+		{"select", map[string]any{"ref": "e1-1", "value": "Winter"}, func(a *browserAdapter, ctx context.Context, values map[string]any) (any, error) {
+			return a.selectOption(ctx, values, agent.ToolContext{})
+		}, "select,inspect"},
+		{"press", map[string]any{"key": "Enter"}, func(a *browserAdapter, ctx context.Context, values map[string]any) (any, error) {
+			return a.pressKey(ctx, values, agent.ToolContext{})
+		}, "press,inspect"},
+		{"scroll", map[string]any{"delta_y": float64(500)}, func(a *browserAdapter, ctx context.Context, values map[string]any) (any, error) {
+			return a.scroll(ctx, values, agent.ToolContext{})
+		}, "scroll,inspect"},
+		{"resize", map[string]any{"width": float64(375), "height": float64(812)}, func(a *browserAdapter, ctx context.Context, values map[string]any) (any, error) {
+			return a.resize(ctx, values, agent.ToolContext{})
+		}, "resize,inspect"},
+		{"wait", map[string]any{"text": "Ready", "timeout_ms": float64(1000)}, func(a *browserAdapter, ctx context.Context, values map[string]any) (any, error) {
+			return a.waitFor(ctx, values, agent.ToolContext{})
+		}, "wait,inspect"},
+		{"console", map[string]any{}, func(a *browserAdapter, ctx context.Context, values map[string]any) (any, error) {
+			return a.consoleErrors(ctx, values, agent.ToolContext{})
+		}, "console"},
+		{"network", map[string]any{}, func(a *browserAdapter, ctx context.Context, values map[string]any) (any, error) {
+			return a.networkErrors(ctx, values, agent.ToolContext{})
+		}, "network"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			session := &fakeSession{elements: map[string]browser.Element{"e1-1": {Mutating: true}}}
+			adapter := &browserAdapter{session: session, policy: runPolicy}
+			if _, err := test.invoke(adapter, context.Background(), test.values); err != nil {
+				t.Fatal(err)
+			}
+			if calls := strings.Join(session.calls, ","); calls != test.calls {
+				t.Fatalf("calls = %q, want %q", calls, test.calls)
+			}
+		})
 	}
 }
 

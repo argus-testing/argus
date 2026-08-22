@@ -14,6 +14,7 @@ import (
 	"github.com/ace-foundry/argus-testing/argus/internal/browser"
 	"github.com/ace-foundry/argus-testing/argus/internal/domain"
 	"github.com/ace-foundry/argus-testing/argus/internal/gemini"
+	"github.com/ace-foundry/argus-testing/argus/internal/policy"
 	"github.com/ace-foundry/argus-testing/argus/internal/store"
 )
 
@@ -119,7 +120,22 @@ func (r *Runner) Run(parent context.Context, id string, authorization domain.Run
 }
 
 func (r *Runner) execute(ctx context.Context, id string, run *domain.Run, authorization domain.RunAuthorization) (*domain.RunReport, error) {
-	_ = authorization
+	effectiveAuthorization := authorization
+	if run.Policy != nil {
+		effectiveAuthorization.AllowMutations = run.Policy.AllowMutations
+		effectiveAuthorization.AllowDestructive = run.Policy.AllowDestructive
+		effectiveAuthorization.AllowedOrigins = append([]string(nil), run.Policy.AllowedOrigins...)
+	}
+	runPolicy, err := policy.New(run.URL, effectiveAuthorization)
+	if err != nil {
+		return nil, fmt.Errorf("run policy: %w", err)
+	}
+	secrets, err := newSecretSet(authorization.SecretBindings)
+	if err != nil {
+		return nil, err
+	}
+	defer secrets.Close()
+
 	validator, err := r.complete(ctx, spec("validator", validatorInstruction, r.model, nil, true), id+":validator", runMessage(run))
 	if err != nil {
 		return nil, err
@@ -132,7 +148,12 @@ func (r *Runner) execute(ctx context.Context, id string, run *domain.Run, author
 		return nil, err
 	}
 
-	session, err := r.browser.Open(ctx)
+	session, err := r.browser.Open(ctx, browser.SessionOptions{
+		AllowMutations: effectiveAuthorization.AllowMutations,
+		AllowNavigation: func(target string) bool {
+			return runPolicy.CheckNavigation(target) == nil
+		},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("browser: %w", err)
 	}
@@ -140,7 +161,7 @@ func (r *Runner) execute(ctx context.Context, id string, run *domain.Run, author
 	if _, err := session.Navigate(ctx, run.URL); err != nil {
 		return nil, fmt.Errorf("browser: %w", err)
 	}
-	adapter := &browserAdapter{runner: r, runID: id, session: session}
+	adapter := &browserAdapter{runner: r, runID: id, session: session, policy: runPolicy, secrets: secrets}
 	initial, err := adapter.capture(ctx, "Initial page", true)
 	if err != nil {
 		return nil, err

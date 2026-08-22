@@ -7,8 +7,9 @@ import (
 )
 
 var (
-	ErrStaleElement   = errors.New("element reference is stale")
-	ErrUnknownElement = errors.New("element reference is unknown")
+	ErrStaleElement      = errors.New("element reference is stale")
+	ErrUnknownElement    = errors.New("element reference is unknown")
+	ErrNavigationBlocked = errors.New("browser navigation was blocked by run policy")
 )
 
 // Element is the bounded, model-visible description of one interactive node.
@@ -54,9 +55,8 @@ type NetworkError struct {
 }
 
 type elementTarget struct {
-	selector    string
-	mutating    bool
-	destructive bool
+	selector string
+	element  Element
 }
 
 type elementRegistry struct {
@@ -75,9 +75,18 @@ func (r *elementRegistry) replace(targets []elementTarget) []string {
 	for index, target := range targets {
 		reference := fmt.Sprintf("e%d-%d", r.generation, index+1)
 		references[index] = reference
+		target.element.Ref = reference
 		r.targets[reference] = target
 	}
 	return references
+}
+
+func (r *elementRegistry) element(reference string) (Element, error) {
+	target, err := r.resolve(reference)
+	if err != nil {
+		return Element{}, err
+	}
+	return target.element, nil
 }
 
 func (r *elementRegistry) invalidate() {
