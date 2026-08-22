@@ -5,8 +5,7 @@ export type McpClient = (typeof mcpClients)[number];
 const localStdioConfig = JSON.stringify({
   mcpServers: {
     argus: {
-      command: "uv",
-      args: ["run", "argus-mcp"],
+      command: "argus-mcp",
       env: { ARGUS_BASE_URL: "http://127.0.0.1:8000" },
     },
   },

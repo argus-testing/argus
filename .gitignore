@@ -15,4 +15,6 @@ dist/
 frontend/node_modules/
 frontend/dist/
 *.tsbuildinfo
+/backend-go/argus
+/backend-go/argus-mcp
 data

@@ -31,8 +31,7 @@ test("generates a local stdio configuration with the Argus server URL for every 
   const expected = {
     mcpServers: {
       argus: {
-        command: "uv",
-        args: ["run", "argus-mcp"],
+        command: "argus-mcp",
         env: { ARGUS_BASE_URL: "http://127.0.0.1:8000" },
       },
     },

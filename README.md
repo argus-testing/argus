@@ -69,21 +69,19 @@ Argus is source-available and fully local-first — SQLite storage, no telemetry
 
 ### Requirements
 
-- Python 3.11+, [`uv`](https://docs.astral.sh/uv/), and Node.js 20.19+ or 22.12+
-- A [Gemini API key](https://aistudio.google.com/app/apikey) for real runs
+- Go 1.25+, Node.js 20.19+ or 22.12+, and a [Gemini API key](https://aistudio.google.com/app/apikey) for real runs
 
 ### Run locally
 
+From the repository root:
+
 ```bash
-cp .env.example .env
-# Set GEMINI_API_KEY in .env
-uv sync --dev
-uv run playwright install chromium
 cd frontend && npm install && npm run build && cd ..
-uv run uvicorn argus.app:app --reload --env-file .env
+go -C backend-go run ./cmd/argus install-browser
+GEMINI_API_KEY=your-key GEMINI_MODEL=gemini-2.5-flash ARGUS_RUN_TIMEOUT=300 ARGUS_DB_PATH=data/argus.db PORT=8000 go -C backend-go run ./cmd/argus
 ```
 
-Open <http://localhost:8000>. For frontend hot reload, run `npm run dev` in `frontend/` alongside Uvicorn and open <http://localhost:5173>.
+Open <http://localhost:8000>. For frontend hot reload, run `npm run dev` in `frontend/` and the Go server in another terminal.
 
 Configuration is environment-only:
 
@@ -91,28 +89,33 @@ Configuration is environment-only:
 | --- | --- | --- |
 | `GEMINI_API_KEY` | — | Required for real execution |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini REST model |
-| `ARGUS_DATA_DIR` | `data` | SQLite and screenshot directory |
-| `ARGUS_HEADLESS` | `true` | Playwright browser mode |
 | `ARGUS_RUN_TIMEOUT` | `300` | Run timeout in seconds |
+| `ARGUS_DB_PATH` | `data/argus.db` | SQLite file; screenshots are stored beside it |
+| `PORT` | `8000` | Go server port |
 | `ARGUS_BASE_URL` | `http://127.0.0.1:8000` | Running local Argus REST server used by the MCP adapter |
 
 ### Connect an MCP client
 
-Start Argus normally, then configure your MCP client to launch the local stdio adapter:
+Start Argus normally, then install the local stdio adapter from the repository root:
+
+```bash
+go install ./backend-go/cmd/argus-mcp
+```
+
+Ensure Go's bin directory (usually `$(go env GOPATH)/bin`) is on your `PATH`, then configure your MCP client:
 
 ```json
 {
   "mcpServers": {
     "argus": {
-      "command": "uv",
-      "args": ["run", "argus-mcp"],
+      "command": "argus-mcp",
       "env": {"ARGUS_BASE_URL": "http://127.0.0.1:8000"}
     }
   }
 }
 ```
 
-The adapter exposes `start_test`, `get_test_run`, `list_test_runs`, `cancel_test`, and `get_test_evidence`. It connects only to the existing REST server; start Uvicorn before using these tools. The same client-specific configuration and server status are available in **Settings → MCP setup**.
+The adapter exposes `start_test`, `get_test_run`, `list_test_runs`, `cancel_test`, and `get_test_evidence`. It connects only to the existing REST server; start Go Argus before using these tools. The same client-specific configuration and server status are available in **Settings → MCP setup**.
 
 Argus accepts normal HTTP(S) targets, including trusted localhost and private-network apps. It rejects credentials and sensitive query parameters in target URLs, and never stores provider secrets, typed browser values, or inspected page content. The settings screen only shows whether provider configuration is present.
 
@@ -129,22 +132,20 @@ The UI is available at <http://localhost:8000> and persistent data is written to
 ### Development checks
 
 ```bash
-uv run pytest
-uv run ruff check argus tests
-uv run pyright argus tests
+cd backend-go && go test -race ./... && go vet ./...
+cd .. && uv run pytest
 cd frontend && npm run typecheck && npm run lint && npm run build
 ```
 
 ### Architecture
 
-- `argus/runtime`: provider-neutral agent, message, tool, and session boundary
-- `argus/providers/gemini.py`: raw `httpx` Gemini REST/SSE adapter (no provider SDK)
-- `argus/pipeline.py`: planning, one browser agent, evidence capture, and reporting
-- `argus/store.py`: SQLite runs, events, screenshots, and reports
-- `argus/app.py`: REST API, reconnectable per-run WebSockets, and built UI serving
+- `backend-go/cmd/argus`: local REST/WebSocket server and built UI serving
+- `backend-go/internal/runner`: Gemini pipeline, Playwright browser runs, SQLite evidence
+- `backend-go/cmd/argus-mcp`: local stdio MCP adapter for the REST server
 - `frontend`: dashboard/composer, live session, history, report, and read-only settings
+- `argus/` and `tests/`: retained Python implementation and tests during the Go transition
 
-API docs are available at `/docs`. All data is local; there is no authentication or multi-user isolation in this release.
+All data is local; there is no authentication or multi-user isolation in this release.
 
 ## License
 

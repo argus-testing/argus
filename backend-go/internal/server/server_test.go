@@ -223,6 +223,77 @@ func TestStaticFallbackDoesNotSwallowAPI(t *testing.T) {
 	}
 }
 
+func TestCloseCancelsActiveRuns(t *testing.T) {
+	server, _, runner := newTestServer(t, "")
+	if !server.start("active", nil) {
+		t.Fatal("runner did not start")
+	}
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatal("runner did not start")
+	}
+	server.Close()
+	server.Wait()
+	select {
+	case <-runner.cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("runner was not cancelled")
+	}
+}
+
+func TestAdmittedRunStartsAfterClose(t *testing.T) {
+	server, _, runner := newTestServer(t, "")
+	admission := server.admitRun()
+	if admission == nil {
+		t.Fatal("run was not admitted")
+	}
+	server.Close()
+	if !server.start("admitted", admission) {
+		t.Fatal("admitted runner did not start")
+	}
+	select {
+	case id := <-runner.started:
+		if id != "admitted" {
+			t.Fatalf("started = %q", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runner did not start")
+	}
+	server.cancelTask("admitted")
+	server.Wait()
+}
+
+func TestCloseRejectsNewRunsBeforePersistence(t *testing.T) {
+	server, db, runner := newTestServer(t, "")
+	server.Close()
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	response := request(t, httpServer.Client(), http.MethodPost, httpServer.URL+"/api/runs", `{"url":"https://example.com","instructions":"check"}`)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	var responseBody map[string]string
+	decode(t, response, &responseBody)
+	if responseBody["detail"] != "Server is shutting down" {
+		t.Fatalf("response = %#v", responseBody)
+	}
+	runs, err := db.ListRuns(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs = %#v", runs)
+	}
+	select {
+	case id := <-runner.started:
+		t.Fatalf("runner started %q", id)
+	default:
+	}
+}
+
 func TestMissingRunWebSocketCloses4404(t *testing.T) {
 	server, _, _ := newTestServer(t, "")
 	httpServer := httptest.NewServer(server)

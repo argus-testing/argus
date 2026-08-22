@@ -5,13 +5,23 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM mcr.microsoft.com/playwright/python:v1.62.0-noble
+FROM golang:1.25-bookworm AS go-build
+WORKDIR /src/backend-go
+COPY backend-go/go.mod backend-go/go.sum ./
+RUN go mod download
+COPY backend-go/ ./
+RUN go build -o /out/argus ./cmd/argus \
+    && go build -o /out/argus-mcp ./cmd/argus-mcp \
+    && go build -o /out/playwright github.com/mxschmitt/playwright-go/cmd/playwright
+
+FROM ubuntu:noble
 WORKDIR /app
-COPY --from=ghcr.io/astral-sh/uv:0.10.9 /uv /uvx /bin/
-COPY pyproject.toml uv.lock README.md LICENSE ./
-COPY argus ./argus
+COPY --from=go-build /out/argus /out/argus-mcp /out/playwright /usr/local/bin/
 COPY --from=frontend /app/argus/static ./argus/static
-RUN uv sync --frozen --no-dev
-ENV PATH="/app/.venv/bin:$PATH" ARGUS_DATA_DIR=/app/data
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && /usr/local/bin/playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
+ENV ARGUS_DB_PATH=/app/data/argus.db PORT=8000
 EXPOSE 8000
-CMD ["uvicorn", "argus.app:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["/usr/local/bin/argus"]

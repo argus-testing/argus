@@ -7,7 +7,8 @@ services:
       - path: .env
         required: false
     environment:
-      ARGUS_DATA_DIR: /app/data
+      ARGUS_DB_PATH: /app/data/argus.db
+      PORT: "8000"
     volumes:
       - ./data:/app/data
     init: true

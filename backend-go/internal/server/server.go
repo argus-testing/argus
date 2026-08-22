@@ -53,7 +53,16 @@ type Server struct {
 
 	tasksMu sync.Mutex
 	tasks   map[string]context.CancelFunc
+	closing bool
+	tasksWG sync.WaitGroup
 }
+
+type runAdmission struct {
+	server *Server
+	once   sync.Once
+}
+
+func (a *runAdmission) done() { a.once.Do(a.server.tasksWG.Done) }
 
 func New(runStore *store.Store, runner Runner, options Options) (*Server, error) {
 	if runStore == nil {
@@ -119,6 +128,18 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		writeValidation(w, validation)
 		return
 	}
+	admission := s.admitRun()
+	if admission == nil {
+		writeError(w, http.StatusServiceUnavailable, "Server is shutting down")
+		return
+	}
+	started := false
+	defer func() {
+		if !started {
+			admission.done()
+		}
+	}()
+
 	run, err := s.store.CreateRun(SanitizeURL(request.URL), request.Instructions)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Internal server error")
@@ -130,7 +151,11 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Publish(*event)
-	s.start(run.ID)
+	if !s.start(run.ID, admission) {
+		writeError(w, http.StatusServiceUnavailable, "Server is shutting down")
+		return
+	}
+	started = true
 	writeJSON(w, http.StatusCreated, run)
 }
 
@@ -211,18 +236,59 @@ func (s *Server) cancelRun(w http.ResponseWriter, id string) {
 	writeJSON(w, http.StatusOK, run)
 }
 
-func (s *Server) start(id string) {
+func (s *Server) admitRun() *runAdmission {
+	s.tasksMu.Lock()
+	defer s.tasksMu.Unlock()
+	if s.closing {
+		return nil
+	}
+	s.tasksWG.Add(1)
+	return &runAdmission{server: s}
+}
+
+func (s *Server) start(id string, admission *runAdmission) bool {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.tasksMu.Lock()
+	if s.closing && admission == nil {
+		s.tasksMu.Unlock()
+		cancel()
+		return false
+	}
+	if admission == nil {
+		s.tasksWG.Add(1)
+	}
 	s.tasks[id] = cancel
 	s.tasksMu.Unlock()
 	go func() {
+		if admission == nil {
+			defer s.tasksWG.Done()
+		} else {
+			defer admission.done()
+		}
 		s.runner.Run(ctx, id)
 		s.tasksMu.Lock()
 		delete(s.tasks, id)
 		s.tasksMu.Unlock()
 	}()
+	return true
 }
+
+// Close rejects new runs and stops runs that are already active.
+func (s *Server) Close() {
+	s.tasksMu.Lock()
+	s.closing = true
+	cancels := make([]context.CancelFunc, 0, len(s.tasks))
+	for _, cancel := range s.tasks {
+		cancels = append(cancels, cancel)
+	}
+	s.tasksMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+}
+
+// Wait waits for runs stopped by Close.
+func (s *Server) Wait() { s.tasksWG.Wait() }
 
 func (s *Server) cancelTask(id string) {
 	s.tasksMu.Lock()
