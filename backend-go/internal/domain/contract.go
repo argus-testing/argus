@@ -1,0 +1,85 @@
+package domain
+
+const (
+	RunsEndpoint      = "/api/runs"
+	RunEndpoint       = "/api/runs/{run_id}"
+	CancelRunEndpoint = "/api/runs/{run_id}/cancel"
+	SettingsEndpoint  = "/api/settings"
+	RunEventsEndpoint = "/ws/runs/{run_id}"
+)
+
+type RunStatus string
+
+const (
+	RunStatusQueued    RunStatus = "queued"
+	RunStatusRunning   RunStatus = "running"
+	RunStatusPassed    RunStatus = "passed"
+	RunStatusFailed    RunStatus = "failed"
+	RunStatusCancelled RunStatus = "cancelled"
+)
+
+type ReportVerdict string
+
+const (
+	ReportVerdictPassed       ReportVerdict = "passed"
+	ReportVerdictFailed       ReportVerdict = "failed"
+	ReportVerdictInconclusive ReportVerdict = "inconclusive"
+)
+
+type EventType string
+
+const (
+	EventRunQueued          EventType = "run.queued"
+	EventRunStarted         EventType = "run.started"
+	EventRunCompleted       EventType = "run.completed"
+	EventRunFailed          EventType = "run.failed"
+	EventRunCancelled       EventType = "run.cancelled"
+	EventPlanCompleted      EventType = "plan.completed"
+	EventBrowserAction      EventType = "browser.action"
+	EventBrowserObservation EventType = "browser.observation"
+	EventBrowserScreenshot  EventType = "browser.screenshot"
+)
+
+type Finding struct {
+	Severity string `json:"severity"`
+	Title    string `json:"title"`
+	Detail   string `json:"detail"`
+}
+
+type RunReport struct {
+	Verdict         ReportVerdict `json:"verdict"`
+	Summary         string        `json:"summary"`
+	Plan            *string       `json:"plan,omitempty"`
+	Findings        []Finding     `json:"findings"`
+	Recommendations []string      `json:"recommendations"`
+}
+
+type RunEvent struct {
+	ID        int64          `json:"id"`
+	RunID     string         `json:"run_id"`
+	Type      EventType      `json:"type"`
+	Data      map[string]any `json:"data"`
+	CreatedAt string         `json:"created_at"`
+}
+
+type Run struct {
+	ID           string     `json:"id"`
+	URL          string     `json:"url"`
+	Instructions string     `json:"instructions"`
+	Status       RunStatus  `json:"status"`
+	CreatedAt    string     `json:"created_at"`
+	UpdatedAt    string     `json:"updated_at"`
+	Error        *string    `json:"error"`
+	Report       *RunReport `json:"report"`
+	Events       []RunEvent `json:"events,omitempty"`
+}
+
+type CreateRequest struct {
+	URL          string `json:"url"`
+	Instructions string `json:"instructions"`
+}
+
+type SettingsResponse struct {
+	GeminiConfigured bool   `json:"gemini_configured"`
+	Model            string `json:"model"`
+}
