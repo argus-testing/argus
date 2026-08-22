@@ -41,7 +41,10 @@ func (s *Store) Initialize() error {
 CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY, url TEXT NOT NULL, instructions TEXT NOT NULL,
     status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-    report_json TEXT, error TEXT
+    report_json TEXT, error TEXT,
+    allow_mutations INTEGER NOT NULL DEFAULT 0,
+    allow_destructive INTEGER NOT NULL DEFAULT 0,
+    allowed_origins_json TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
@@ -54,23 +57,81 @@ CREATE TABLE IF NOT EXISTS screenshots (
     created_at TEXT NOT NULL,
     FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
 );`)
-	return err
+	if err != nil {
+		return err
+	}
+	migrations := []struct {
+		column    string
+		statement string
+	}{
+		{"allow_mutations", `ALTER TABLE runs ADD COLUMN allow_mutations INTEGER NOT NULL DEFAULT 0`},
+		{"allow_destructive", `ALTER TABLE runs ADD COLUMN allow_destructive INTEGER NOT NULL DEFAULT 0`},
+		{"allowed_origins_json", `ALTER TABLE runs ADD COLUMN allowed_origins_json TEXT NOT NULL DEFAULT '[]'`},
+	}
+	for _, migration := range migrations {
+		exists, err := s.hasRunColumn(migration.column)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := s.db.Exec(migration.statement); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
-func (s *Store) CreateRun(url, instructions string) (*domain.Run, error) {
+func (s *Store) hasRunColumn(name string) (bool, error) {
+	rows, err := s.db.Query(`PRAGMA table_info(runs)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var index int
+		var column, dataType string
+		var notNull, primaryKey int
+		var defaultValue sql.NullString
+		if err := rows.Scan(&index, &column, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if column == name {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func (s *Store) CreateRun(url, instructions string, policy domain.RunPolicy) (*domain.Run, error) {
 	id, err := newID()
 	if err != nil {
 		return nil, err
 	}
 	now := timestamp()
-	if _, err := s.db.Exec(`INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`, id, url, instructions, domain.RunStatusQueued, now, now); err != nil {
+	if policy.AllowedOrigins == nil {
+		policy.AllowedOrigins = []string{}
+	}
+	encodedOrigins, err := json.Marshal(policy.AllowedOrigins)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.db.Exec(`INSERT INTO runs (
+id, url, instructions, status, created_at, updated_at, report_json, error,
+allow_mutations, allow_destructive, allowed_origins_json
+) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)`, id, url, instructions, domain.RunStatusQueued, now, now, policy.AllowMutations, policy.AllowDestructive, string(encodedOrigins)); err != nil {
 		return nil, err
 	}
 	return s.GetRun(id, false)
 }
 
 func (s *Store) ListRuns(limit int) ([]domain.Run, error) {
-	rows, err := s.db.Query(`SELECT * FROM runs ORDER BY created_at DESC LIMIT ?`, limit)
+	rows, err := s.db.Query(`SELECT id, url, instructions, status, created_at, updated_at,
+report_json, error, allow_mutations, allow_destructive, allowed_origins_json
+FROM runs ORDER BY created_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +148,9 @@ func (s *Store) ListRuns(limit int) ([]domain.Run, error) {
 }
 
 func (s *Store) GetRun(id string, includeEvents bool) (*domain.Run, error) {
-	run, err := scanRun(s.db.QueryRow(`SELECT * FROM runs WHERE id = ?`, id))
+	run, err := scanRun(s.db.QueryRow(`SELECT id, url, instructions, status, created_at, updated_at,
+report_json, error, allow_mutations, allow_destructive, allowed_origins_json
+FROM runs WHERE id = ?`, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -220,9 +283,17 @@ func scanRun(row rowScanner) (*domain.Run, error) {
 	var run domain.Run
 	var report sql.NullString
 	var runError sql.NullString
-	if err := row.Scan(&run.ID, &run.URL, &run.Instructions, &run.Status, &run.CreatedAt, &run.UpdatedAt, &report, &runError); err != nil {
+	var allowMutations bool
+	var allowDestructive bool
+	var allowedOrigins string
+	if err := row.Scan(&run.ID, &run.URL, &run.Instructions, &run.Status, &run.CreatedAt, &run.UpdatedAt, &report, &runError, &allowMutations, &allowDestructive, &allowedOrigins); err != nil {
 		return nil, err
 	}
+	policy := domain.RunPolicy{AllowMutations: allowMutations, AllowDestructive: allowDestructive, AllowedOrigins: []string{}}
+	if err := json.Unmarshal([]byte(allowedOrigins), &policy.AllowedOrigins); err != nil {
+		return nil, err
+	}
+	run.Policy = &policy
 	if report.Valid {
 		var value domain.RunReport
 		if err := json.Unmarshal([]byte(report.String), &value); err != nil {

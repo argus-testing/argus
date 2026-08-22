@@ -59,7 +59,7 @@ func TestStaticScreenshotsAndSymlinkContainment(t *testing.T) {
 
 func TestWebSocketDeliversMoreThanChannelCapacityAndTerminal(t *testing.T) {
 	server, db, _ := newTestServer(t, "")
-	run, err := db.CreateRun("https://example.com", "check")
+	run, err := db.CreateRun("https://example.com", "check", domain.RunPolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}

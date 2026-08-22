@@ -16,7 +16,7 @@ import (
 
 func TestStalledSubscriberDoesNotBlockCancelAndReplayRecoversEvents(t *testing.T) {
 	server, db, _ := newTestServer(t, "")
-	run, err := db.CreateRun("https://example.com", "check")
+	run, err := db.CreateRun("https://example.com", "check", domain.RunPolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}

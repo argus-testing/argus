@@ -19,12 +19,17 @@ import (
 )
 
 type fakeRunner struct {
-	started   chan string
+	started   chan startedRun
 	cancelled chan string
 }
 
-func (r *fakeRunner) Run(ctx context.Context, id string) {
-	r.started <- id
+type startedRun struct {
+	id            string
+	authorization domain.RunAuthorization
+}
+
+func (r *fakeRunner) Run(ctx context.Context, id string, authorization domain.RunAuthorization) {
+	r.started <- startedRun{id: id, authorization: authorization}
 	<-ctx.Done()
 	r.cancelled <- id
 }
@@ -36,7 +41,7 @@ func newTestServer(t *testing.T, staticDir string) (*Server, *store.Store, *fake
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	runner := &fakeRunner{started: make(chan string, 10), cancelled: make(chan string, 10)}
+	runner := &fakeRunner{started: make(chan startedRun, 10), cancelled: make(chan string, 10)}
 	server, err := New(db, runner, Options{StaticDir: staticDir, GeminiConfigured: true})
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +82,7 @@ func TestRESTRoutesValidationAndCancellation(t *testing.T) {
 		}
 		response.Body.Close()
 	}
-	response := request(t, client, http.MethodPost, httpServer.URL+"/api/runs", `{"url":"https://example.com/path?view=list","instructions":"check"}`)
+	response := request(t, client, http.MethodPost, httpServer.URL+"/api/runs", `{"url":"https://example.com/path?view=list","instructions":"check","authorization":{"allow_mutations":true,"allowed_origins":["https://accounts.example.com"],"secret_bindings":{"login_password":"private-value"}}}`)
 	if response.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d", response.StatusCode)
 	}
@@ -85,15 +90,22 @@ func TestRESTRoutesValidationAndCancellation(t *testing.T) {
 	decode(t, response, &created)
 	select {
 	case got := <-runner.started:
-		if got != created.ID {
-			t.Fatalf("started = %q", got)
+		if got.id != created.ID || !got.authorization.AllowMutations || got.authorization.SecretBindings["login_password"] != "private-value" {
+			t.Fatalf("started = %#v", got)
+		}
+		if created.Policy == nil || !created.Policy.AllowMutations || len(created.Policy.AllowedOrigins) != 1 {
+			t.Fatalf("created policy = %#v", created.Policy)
+		}
+		encoded, _ := json.Marshal(created)
+		if strings.Contains(string(encoded), "private-value") || strings.Contains(string(encoded), "login_password") {
+			t.Fatalf("created run leaked secret binding: %s", encoded)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("runner did not start")
 	}
 
 	time.Sleep(time.Millisecond)
-	newer, err := db.CreateRun("https://example.com/newer", "check")
+	newer, err := db.CreateRun("https://example.com/newer", "check", domain.RunPolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +152,7 @@ func TestRESTRoutesValidationAndCancellation(t *testing.T) {
 
 func TestWebSocketReplayLiveAndTerminalClose(t *testing.T) {
 	server, db, _ := newTestServer(t, "")
-	run, err := db.CreateRun("https://example.com", "check")
+	run, err := db.CreateRun("https://example.com", "check", domain.RunPolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +237,7 @@ func TestStaticFallbackDoesNotSwallowAPI(t *testing.T) {
 
 func TestCloseCancelsActiveRuns(t *testing.T) {
 	server, _, runner := newTestServer(t, "")
-	if !server.start("active", nil) {
+	if !server.start("active", domain.RunAuthorization{}, nil) {
 		t.Fatal("runner did not start")
 	}
 	select {
@@ -249,13 +261,13 @@ func TestAdmittedRunStartsAfterClose(t *testing.T) {
 		t.Fatal("run was not admitted")
 	}
 	server.Close()
-	if !server.start("admitted", admission) {
+	if !server.start("admitted", domain.RunAuthorization{}, admission) {
 		t.Fatal("admitted runner did not start")
 	}
 	select {
 	case id := <-runner.started:
-		if id != "admitted" {
-			t.Fatalf("started = %q", id)
+		if id.id != "admitted" {
+			t.Fatalf("started = %#v", id)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("runner did not start")
@@ -289,7 +301,7 @@ func TestCloseRejectsNewRunsBeforePersistence(t *testing.T) {
 	}
 	select {
 	case id := <-runner.started:
-		t.Fatalf("runner started %q", id)
+		t.Fatalf("runner started %#v", id)
 	default:
 	}
 }
@@ -316,5 +328,15 @@ func TestURLSensitiveNameNormalization(t *testing.T) {
 		if err := ValidateURL(value); err == nil {
 			t.Fatalf("accepted %q", value)
 		}
+	}
+}
+
+func TestCreateRequestAuthorizationDefaultsReadOnly(t *testing.T) {
+	got, validation := decodeCreateRequest(strings.NewReader(`{"url":"https://example.com","instructions":"inspect"}`))
+	if len(validation) != 0 {
+		t.Fatalf("validation = %#v", validation)
+	}
+	if got.Authorization != nil {
+		t.Fatalf("authorization = %#v", got.Authorization)
 	}
 }

@@ -15,7 +15,7 @@
 - Existing `{url,instructions}` REST and MCP clients remain compatible and read-only by default.
 - Secret values never enter SQLite, events, logs, reports, or model requests.
 - Initial target origin is authorized; every additional HTTP(S) origin is explicit.
-- Mutations require `allow_mutations=true`; destructive actions also require explicit destructive intent in the original instructions.
+- Mutations require `allow_mutations=true`; destructive actions also require `allow_destructive=true`.
 - Model tools use run-local element references, not arbitrary CSS selectors.
 - Every significant action is followed by a fresh snapshot; every accepted pass has positive persisted evidence.
 - SaaS-only organization, billing, scheduling, integration, and admin systems stay out of this repository.
@@ -45,7 +45,7 @@
 func TestPolicyRestrictsOriginsAndMutations(t *testing.T) {
     p, err := policy.New("https://app.example.test/start", domain.RunAuthorization{
         AllowedOrigins: []string{"https://accounts.example.test"},
-    }, "check login without changing data")
+    })
     if err != nil { t.Fatal(err) }
     for _, allowed := range []string{"https://app.example.test/a", "https://accounts.example.test/oauth"} {
         if err := p.CheckNavigation(allowed); err != nil { t.Errorf("%s: %v", allowed, err) }
@@ -53,14 +53,14 @@ func TestPolicyRestrictsOriginsAndMutations(t *testing.T) {
     if err := p.CheckNavigation("http://169.254.169.254/latest/meta-data"); !errors.Is(err, policy.ErrOriginDenied) {
         t.Fatalf("navigation error = %v", err)
     }
-    if err := p.CheckAction(policy.Action{Kind: policy.ActionSubmit, Name: "Save profile"}); !errors.Is(err, policy.ErrMutationDenied) {
+    if err := p.CheckAction(policy.Action{Kind: policy.ActionSubmit}); !errors.Is(err, policy.ErrMutationDenied) {
         t.Fatalf("mutation error = %v", err)
     }
 }
 
-func TestPolicyRequiresExplicitIntentForDestructiveAction(t *testing.T) {
-    p, _ := policy.New("https://app.example.test", domain.RunAuthorization{AllowMutations: true}, "edit my profile")
-    if err := p.CheckAction(policy.Action{Kind: policy.ActionClick, Name: "Delete account", Destructive: true}); !errors.Is(err, policy.ErrDestructiveDenied) {
+func TestPolicyRequiresExplicitAuthorityForDestructiveAction(t *testing.T) {
+    p, _ := policy.New("https://app.example.test", domain.RunAuthorization{AllowMutations: true})
+    if err := p.CheckAction(policy.Action{Kind: policy.ActionClick, Destructive: true}); !errors.Is(err, policy.ErrDestructiveDenied) {
         t.Fatalf("destructive error = %v", err)
     }
 }
@@ -100,7 +100,7 @@ func (p *Policy) CheckNavigation(target string) error
 func (p *Policy) CheckAction(action Action) error
 ```
 
-Normalize origins as lowercase `scheme://host[:port]`, reject credentials/query/fragment in configured origins, and derive destructive intent only from explicit verbs (`delete`, `remove`, `destroy`, `purchase`, `pay`, `checkout`) in the original instructions.
+Normalize origins as lowercase `scheme://host[:port]`, reject credentials/query/fragment in configured origins, and reject `allow_destructive=true` unless `allow_mutations=true`.
 
 - [ ] **Step 4: Run the policy tests and verify GREEN**
 
@@ -141,6 +141,7 @@ Expected: FAIL because authorization fields, migration columns, and the new `Cre
 ```go
 type RunAuthorization struct {
     AllowMutations bool              `json:"allow_mutations"`
+    AllowDestructive bool            `json:"allow_destructive"`
     AllowedOrigins []string          `json:"allowed_origins"`
     SecretBindings map[string]string `json:"secret_bindings"`
 }

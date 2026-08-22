@@ -75,6 +75,7 @@ Runs remain read-only by default. The create-run contract gains an optional auth
 ```json
 {
   "allow_mutations": false,
+  "allow_destructive": false,
   "allowed_origins": ["https://app.example.test"],
   "secret_bindings": {
     "login_email": "user@example.test",
@@ -87,7 +88,7 @@ The initial target origin is always authorized. Additional origins must be expli
 
 Secret bindings live only in the in-memory active-run registry. SQLite stores the run URL, instructions, non-secret authorization flags, and allowed origins, but never secret names or values. The model refers to a binding by name when typing; the tool resolves it internally. Raw secret values are never included in model messages, tool events, errors, screenshot labels, or reports. Before screenshot capture, sensitive input values are temporarily covered in the rendered page and restored immediately afterward, so multimodal requests and persisted evidence cannot reveal them. Browser action events record only the element reference and a redacted value descriptor.
 
-Mutating actions require `allow_mutations=true`. The policy engine classifies form submissions and clicks using the resolved element's tag, role, accessible name, form method, and nearby semantics. Clearly destructive actions additionally require an explicit destructive intent in the user's original instructions. Policy is enforced below the model/tool layer so alternate selectors or coordinates cannot bypass it.
+Mutating actions require `allow_mutations=true`. Clearly destructive actions additionally require `allow_destructive=true`; destructive authority is invalid unless mutation authority is also enabled. The policy engine classifies form submissions and clicks using the resolved element's tag, role, accessible name, form method, and nearby semantics. Policy is enforced below the model/tool layer so alternate selectors or coordinates cannot bypass it.
 
 ### Pipeline and evidence
 
@@ -160,7 +161,7 @@ The license remains source-available and is described that way consistently. No 
 2. The Docker image builds and serves the frontend/API with Chromium installed.
 3. The fixture suite proves search typing, form fill/submit, select, scroll, keyboard, responsive resize, semantic click, and visual fallback.
 4. Model-driven navigation cannot leave the authorized origin set, including through redirects.
-5. Read-only runs cannot submit or mutate; authorized runs can; destructive actions require explicit user intent.
+5. Read-only runs cannot submit or mutate; authorized runs can; destructive actions require explicit destructive authority.
 6. Secret values never appear in SQLite, events, logs, reports, or model requests.
 7. Screenshots taken during a tool loop are supplied back to Gemini as images.
 8. Every passed test case has positive, persisted evidence; unsupported passes become inconclusive.

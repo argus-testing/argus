@@ -71,12 +71,30 @@ type Run struct {
 	UpdatedAt    string     `json:"updated_at"`
 	Error        *string    `json:"error"`
 	Report       *RunReport `json:"report"`
+	Policy       *RunPolicy `json:"policy,omitempty"`
 	Events       []RunEvent `json:"events,omitempty"`
 }
 
 type CreateRequest struct {
-	URL          string `json:"url"`
-	Instructions string `json:"instructions"`
+	URL           string            `json:"url"`
+	Instructions  string            `json:"instructions"`
+	Authorization *RunAuthorization `json:"authorization,omitempty"`
+}
+
+// RunAuthorization contains caller-provided execution authority. SecretBindings
+// are ephemeral and must never be copied into Run or persisted by the store.
+type RunAuthorization struct {
+	AllowMutations   bool              `json:"allow_mutations,omitempty"`
+	AllowDestructive bool              `json:"allow_destructive,omitempty"`
+	AllowedOrigins   []string          `json:"allowed_origins,omitempty"`
+	SecretBindings   map[string]string `json:"secret_bindings,omitempty"`
+}
+
+// RunPolicy is the non-secret portion of RunAuthorization that may be persisted.
+type RunPolicy struct {
+	AllowMutations   bool     `json:"allow_mutations"`
+	AllowDestructive bool     `json:"allow_destructive"`
+	AllowedOrigins   []string `json:"allowed_origins"`
 }
 
 type SettingsResponse struct {

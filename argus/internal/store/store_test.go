@@ -1,12 +1,51 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/ace-foundry/argus-testing/argus/internal/domain"
 )
+
+func TestStoreMigratesLegacyRunsAndPersistsOnlyRunPolicy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	legacy, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`CREATE TABLE runs (
+id TEXT PRIMARY KEY, url TEXT NOT NULL, instructions TEXT NOT NULL,
+status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+report_json TEXT, error TEXT)`)
+	if closeErr := legacy.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runStore, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runStore.Close() })
+	if err := runStore.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	run, err := runStore.CreateRun("https://example.com", "test", domain.RunPolicy{
+		AllowMutations:   true,
+		AllowDestructive: true,
+		AllowedOrigins:   []string{"https://accounts.example.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Policy == nil || !run.Policy.AllowMutations || !run.Policy.AllowDestructive || len(run.Policy.AllowedOrigins) != 1 {
+		t.Fatalf("run policy = %#v", run.Policy)
+	}
+}
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
@@ -23,7 +62,7 @@ func newTestStore(t *testing.T) *Store {
 
 func TestCRUDAndJSONPersistence(t *testing.T) {
 	store := newTestStore(t)
-	run, err := store.CreateRun("https://example.com", "check")
+	run, err := store.CreateRun("https://example.com", "check", domain.RunPolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +98,7 @@ func TestCRUDAndJSONPersistence(t *testing.T) {
 
 func TestCompetingTerminalTransitionsAreAtomic(t *testing.T) {
 	store := newTestStore(t)
-	run, err := store.CreateRun("https://example.com", "check")
+	run, err := store.CreateRun("https://example.com", "check", domain.RunPolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,8 +150,8 @@ func TestCompetingTerminalTransitionsAreAtomic(t *testing.T) {
 
 func TestReconcileInterrupted(t *testing.T) {
 	store := newTestStore(t)
-	queued, _ := store.CreateRun("https://example.com/queued", "check")
-	running, _ := store.CreateRun("https://example.com/running", "check")
+	queued, _ := store.CreateRun("https://example.com/queued", "check", domain.RunPolicy{})
+	running, _ := store.CreateRun("https://example.com/running", "check", domain.RunPolicy{})
 	if _, err := store.Transition(running.ID, []domain.RunStatus{domain.RunStatusQueued}, domain.RunStatusRunning, domain.EventRunStarted, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}

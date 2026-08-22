@@ -74,7 +74,7 @@ func timeoutFromEnv() time.Duration {
 func (r *Runner) SetPublisher(publish Publisher) { r.publish = publish }
 
 // Run executes one queued run. Store writes always complete before publication.
-func (r *Runner) Run(parent context.Context, id string) {
+func (r *Runner) Run(parent context.Context, id string, authorization domain.RunAuthorization) {
 	if r.store == nil {
 		return
 	}
@@ -94,7 +94,7 @@ func (r *Runner) Run(parent context.Context, id string) {
 	}
 	r.publishEvent(*started)
 
-	report, err := r.execute(ctx, id, run)
+	report, err := r.execute(ctx, id, run, authorization)
 	if parent.Err() != nil { // The server owns cancellation and has already recorded it.
 		return
 	}
@@ -118,7 +118,8 @@ func (r *Runner) Run(parent context.Context, id string) {
 	}
 }
 
-func (r *Runner) execute(ctx context.Context, id string, run *domain.Run) (*domain.RunReport, error) {
+func (r *Runner) execute(ctx context.Context, id string, run *domain.Run, authorization domain.RunAuthorization) (*domain.RunReport, error) {
+	_ = authorization
 	validator, err := r.complete(ctx, spec("validator", validatorInstruction, r.model, nil, true), id+":validator", runMessage(run))
 	if err != nil {
 		return nil, err

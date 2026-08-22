@@ -131,7 +131,7 @@ func newTestStore(t *testing.T) (*store.Store, string) {
 }
 func queuedRun(t *testing.T, db *store.Store) *domain.Run {
 	t.Helper()
-	run, err := db.CreateRun("https://example.com", "check search")
+	run, err := db.CreateRun("https://example.com", "check search", domain.RunPolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestRunnerRunsPublicPipelineAndPersistsSafeBrowserEvents(t *testing.T) {
 		response("```json\n{\"verdict\":\"passed\",\"summary\":\"verified\",\"findings\":[{\"severity\":\"info\",\"title\":\"ok\",\"detail\":\"works\"}],\"recommendations\":[\"keep it\"]}\n```"),
 	}}
 	r := New(db, fakeFactory{session: session}, Options{ScreenshotDir: filepath.Join(t.TempDir(), "screenshots"), Provider: provider})
-	r.Run(context.Background(), run.ID)
+	r.Run(context.Background(), run.ID, domain.RunAuthorization{})
 	current, err := db.GetRun(run.ID, true)
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +226,7 @@ func TestRunnerRejectsUnadvertisedTypeTextWithoutFill(t *testing.T) {
 		tool("type_text", map[string]any{"selector": "#input", "text": "credential"}),
 	}}
 	r := New(db, fakeFactory{session: session}, Options{ScreenshotDir: t.TempDir(), Provider: provider})
-	r.Run(context.Background(), run.ID)
+	r.Run(context.Background(), run.ID, domain.RunAuthorization{})
 
 	current, err := db.GetRun(run.ID, true)
 	if err != nil {
@@ -277,7 +277,7 @@ func TestReportNormalizationAndMissingKeyFailure(t *testing.T) {
 	db, _ := newTestStore(t)
 	run := queuedRun(t, db)
 	t.Setenv("GEMINI_API_KEY", "")
-	New(db, fakeFactory{}, Options{ScreenshotDir: t.TempDir()}).Run(context.Background(), run.ID)
+	New(db, fakeFactory{}, Options{ScreenshotDir: t.TempDir()}).Run(context.Background(), run.ID, domain.RunAuthorization{})
 	current, err := db.GetRun(run.ID, false)
 	if err != nil || current.Status != domain.RunStatusFailed || current.Error == nil || *current.Error != missingAPIKey {
 		t.Fatalf("run = %#v, %v", current, err)
@@ -294,7 +294,7 @@ func TestRunnerDoesNotOverwriteCancellationRace(t *testing.T) {
 	provider := &scriptedProvider{responses: []agent.ModelResponse{response(`{"testable":true}`), response(`{}`)}}
 	r := New(db, fakeFactory{open: func(ctx context.Context) error { once.Do(func() { close(opened) }); <-ctx.Done(); return ctx.Err() }}, Options{ScreenshotDir: t.TempDir(), Provider: provider})
 	done := make(chan struct{})
-	go func() { r.Run(ctx, run.ID); close(done) }()
+	go func() { r.Run(ctx, run.ID, domain.RunAuthorization{}); close(done) }()
 	<-opened
 	cancelled, err := db.Transition(run.ID, []domain.RunStatus{domain.RunStatusRunning}, domain.RunStatusCancelled, domain.EventRunCancelled, nil, nil, nil)
 	if err != nil || cancelled == nil {
@@ -393,7 +393,7 @@ func TestRunnerPersistsTimeoutKind(t *testing.T) {
 	run := queuedRun(t, db)
 	provider := &scriptedProvider{responses: []agent.ModelResponse{response(`{"testable":true}`), response(`{}`)}}
 	r := New(db, fakeFactory{open: func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }}, Options{ScreenshotDir: t.TempDir(), Timeout: 10 * time.Millisecond, Provider: provider})
-	r.Run(context.Background(), run.ID)
+	r.Run(context.Background(), run.ID, domain.RunAuthorization{})
 	current, err := db.GetRun(run.ID, true)
 	if err != nil || current.Status != domain.RunStatusFailed {
 		t.Fatalf("run = %#v, %v", current, err)

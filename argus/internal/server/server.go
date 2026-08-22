@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ace-foundry/argus-testing/argus/internal/domain"
+	"github.com/ace-foundry/argus-testing/argus/internal/policy"
 	"github.com/ace-foundry/argus-testing/argus/internal/store"
 	"github.com/coder/websocket"
 )
@@ -22,12 +23,12 @@ import (
 const defaultModel = "gemini-2.5-flash"
 
 type Runner interface {
-	Run(context.Context, string)
+	Run(context.Context, string, domain.RunAuthorization)
 }
 
 type noOpRunner struct{}
 
-func (noOpRunner) Run(context.Context, string) {}
+func (noOpRunner) Run(context.Context, string, domain.RunAuthorization) {}
 
 type Options struct {
 	StaticDir        string
@@ -140,7 +141,16 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	run, err := s.store.CreateRun(SanitizeURL(request.URL), request.Instructions)
+	authorization := domain.RunAuthorization{}
+	if request.Authorization != nil {
+		authorization = *request.Authorization
+	}
+	runPolicy := domain.RunPolicy{
+		AllowMutations:   authorization.AllowMutations,
+		AllowDestructive: authorization.AllowDestructive,
+		AllowedOrigins:   append([]string(nil), authorization.AllowedOrigins...),
+	}
+	run, err := s.store.CreateRun(SanitizeURL(request.URL), request.Instructions, runPolicy)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Internal server error")
 		return
@@ -151,7 +161,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Publish(*event)
-	if !s.start(run.ID, admission) {
+	if !s.start(run.ID, authorization, admission) {
 		writeError(w, http.StatusServiceUnavailable, "Server is shutting down")
 		return
 	}
@@ -246,7 +256,7 @@ func (s *Server) admitRun() *runAdmission {
 	return &runAdmission{server: s}
 }
 
-func (s *Server) start(id string, admission *runAdmission) bool {
+func (s *Server) start(id string, authorization domain.RunAuthorization, admission *runAdmission) bool {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.tasksMu.Lock()
 	if s.closing && admission == nil {
@@ -265,7 +275,7 @@ func (s *Server) start(id string, admission *runAdmission) bool {
 		} else {
 			defer admission.done()
 		}
-		s.runner.Run(ctx, id)
+		s.runner.Run(ctx, id, authorization)
 		s.tasksMu.Lock()
 		delete(s.tasks, id)
 		s.tasksMu.Unlock()
@@ -574,6 +584,14 @@ func decodeCreateRequest(body io.Reader) (domain.CreateRequest, []validationErro
 	validation := make([]validationError, 0, 2)
 	request.URL = requiredString(fields, "url", &validation)
 	request.Instructions = requiredString(fields, "instructions", &validation)
+	if raw, ok := fields["authorization"]; ok && string(raw) != "null" {
+		var authorization domain.RunAuthorization
+		if err := json.Unmarshal(raw, &authorization); err != nil {
+			validation = append(validation, validationError{Loc: []any{"body", "authorization"}, Type: "object_type", Msg: "Input should be a valid object"})
+		} else {
+			request.Authorization = &authorization
+		}
+	}
 	if len(validation) > 0 {
 		return request, validation
 	}
@@ -586,6 +604,29 @@ func decodeCreateRequest(body io.Reader) (domain.CreateRequest, []validationErro
 	}
 	if length > 10000 {
 		validation = append(validation, validationError{Loc: []any{"body", "instructions"}, Type: "string_too_long", Msg: "String should have at most 10000 characters"})
+	}
+	authorization := domain.RunAuthorization{}
+	if request.Authorization != nil {
+		authorization = *request.Authorization
+	}
+	if len(authorization.AllowedOrigins) > 20 {
+		validation = append(validation, validationError{Loc: []any{"body", "authorization", "allowed_origins"}, Type: "too_long", Msg: "At most 20 additional origins are allowed"})
+	}
+	if len(authorization.SecretBindings) > 20 {
+		validation = append(validation, validationError{Loc: []any{"body", "authorization", "secret_bindings"}, Type: "too_long", Msg: "At most 20 secret bindings are allowed"})
+	}
+	for name, value := range authorization.SecretBindings {
+		if strings.TrimSpace(name) == "" || len(name) > 100 || value == "" || len(value) > 4096 {
+			validation = append(validation, validationError{Loc: []any{"body", "authorization", "secret_bindings"}, Type: "value_error", Msg: "Secret binding names and values must be non-empty and bounded"})
+			break
+		}
+	}
+	policyTarget := request.URL
+	if parsed, _, _, err := parseURLCompatible(request.URL); err == nil {
+		policyTarget = parsed.Scheme + "://" + parsed.Host
+	}
+	if _, err := policy.New(policyTarget, authorization); err != nil {
+		validation = append(validation, validationError{Loc: []any{"body", "authorization", "allowed_origins"}, Type: "value_error", Msg: "Allowed origins must be HTTP(S) origins without credentials, paths, queries, or fragments"})
 	}
 	return request, validation
 }
