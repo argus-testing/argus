@@ -38,6 +38,7 @@ func (f fakeFactory) Open(ctx context.Context) (browser.Session, error) {
 }
 
 type fakeSession struct {
+	browser.Session
 	navigateErr     error
 	screenshotErr   error
 	closed          int
@@ -51,17 +52,17 @@ func (s *fakeSession) Navigate(_ context.Context, url string) (browser.Navigatio
 	s.calls = append(s.calls, "navigate")
 	return browser.Navigation{URL: url, Title: "Example"}, s.navigateErr
 }
-func (s *fakeSession) Inspect(context.Context) (browser.Inspection, error) {
+func (s *fakeSession) Inspect(context.Context) (browser.PageSnapshot, error) {
 	s.calls = append(s.calls, "inspect")
-	return browser.Inspection{URL: "https://example.com", Title: "Secret title", Body: "private page text", Interactive: "private button"}, nil
+	return browser.PageSnapshot{URL: "https://example.com", Title: "Secret title", Text: "private page text", Elements: []browser.Element{{Ref: "e1-1", Name: "private button"}}}, nil
 }
-func (s *fakeSession) Click(context.Context, string) error {
+func (s *fakeSession) Click(context.Context, string) (browser.ActionResult, error) {
 	s.calls = append(s.calls, "click")
-	return nil
+	return browser.ActionResult{URL: "https://example.com"}, nil
 }
-func (s *fakeSession) Fill(context.Context, string, string) error {
-	s.calls = append(s.calls, "fill")
-	return nil
+func (s *fakeSession) Type(context.Context, string, string) (browser.ActionResult, error) {
+	s.calls = append(s.calls, "type")
+	return browser.ActionResult{URL: "https://example.com"}, nil
 }
 func (s *fakeSession) Screenshot(_ context.Context, path string) error {
 	s.calls = append(s.calls, "screenshot")
@@ -148,7 +149,7 @@ func TestRunnerRunsPublicPipelineAndPersistsSafeBrowserEvents(t *testing.T) {
 	provider := &scriptedProvider{responses: []agent.ModelResponse{
 		response(`{"testable":true}`), response(`{"intent":"search"}`),
 		tool("inspect_page", map[string]any{}), response(`{"pages":[]}`), response(`{"tests":[]}`),
-		tool("click", map[string]any{"selector": "#search"}), response(`{"status":"passed"}`),
+		tool("click", map[string]any{"ref": "e1-1"}), response(`{"status":"passed"}`),
 		response("```json\n{\"verdict\":\"passed\",\"summary\":\"verified\",\"findings\":[{\"severity\":\"info\",\"title\":\"ok\",\"detail\":\"works\"}],\"recommendations\":[\"keep it\"]}\n```"),
 	}}
 	r := New(db, fakeFactory{session: session}, Options{ScreenshotDir: filepath.Join(t.TempDir(), "screenshots"), Provider: provider})
@@ -236,8 +237,8 @@ func TestRunnerRejectsUnadvertisedTypeTextWithoutFill(t *testing.T) {
 		t.Fatalf("run status = %s", current.Status)
 	}
 	for _, call := range session.calls {
-		if call == "fill" {
-			t.Fatal("Fill was invoked for an unadvertised type_text call")
+		if call == "type" {
+			t.Fatal("Type was invoked for an unadvertised type_text call")
 		}
 	}
 	if len(provider.requests) != 3 {
@@ -263,7 +264,7 @@ func TestBrowserAdapterReturnsClickAndNavigateObservations(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(navigate, map[string]any{"url": "https://example.com/a?view=all", "title": "Example"}) {
 		t.Fatalf("navigate = %#v, %v", navigate, err)
 	}
-	click, err := adapter.click(ctx, map[string]any{"selector": "#go"}, agent.ToolContext{})
+	click, err := adapter.click(ctx, map[string]any{"ref": "e1-1"}, agent.ToolContext{})
 	if err != nil || !reflect.DeepEqual(click, map[string]any{"url": "https://example.com", "result": "clicked"}) {
 		t.Fatalf("click = %#v, %v", click, err)
 	}

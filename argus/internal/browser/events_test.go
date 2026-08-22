@@ -16,6 +16,7 @@ func TestEventFormattersProtectBrowserPrivacy(t *testing.T) {
 	}{
 		{"navigate action", browser.FormatAction("navigate", map[string]any{"url": url}), map[string]any{"tool": "navigate", "arguments": map[string]any{"url": "https://example.com/a?view=all"}}},
 		{"navigate observation", browser.FormatObservation("navigate", map[string]any{"url": url, "title": "Example", "body": "never persist this"}), map[string]any{"tool": "navigate", "result": map[string]any{"url": "https://example.com/a?view=all", "title": "Example"}}},
+		{"click action", browser.FormatAction("click", map[string]any{"ref": "e1-2", "text": "never persist this"}), map[string]any{"tool": "click", "arguments": map[string]any{"ref": "e1-2"}}},
 		{"click observation", browser.FormatObservation("click", map[string]any{"url": "https://example.com/a?token=secret", "result": "clicked", "body": "never persist this"}), map[string]any{"tool": "click", "result": map[string]any{"url": "https://example.com/a", "result": "clicked"}}},
 		{"inspect observation", browser.FormatObservation("inspect_page", map[string]any{"body": "never persist this", "interactive": "never persist this either"}), map[string]any{"tool": "inspect_page", "result": map[string]any{"omitted": true, "summary": "Page inspection omitted from persisted events"}}},
 	} {

@@ -14,7 +14,7 @@ const comprehenderInstruction = `You are a QA Intent Comprehender. Produce a str
 
 const explorerInstruction = `You are a QA App Explorer. Use inspect_page before actions to build a focused JSON app map of relevant pages, forms, features, navigation, feedback patterns, mapped and unmapped features. Budget at most 8 interactions/navigation actions. Do not log in, enter credentials or secrets, submit forms, or perform destructive actions. Respect all hard user constraints. Respond ONLY with JSON.`
 
-const strategistInstruction = `You are a QA Test Strategist. Produce ONLY JSON test plan grounded in the app map. Cover requested features, use real observed selectors/pages, include preconditions and a success goal for each test. Carry every applicable user constraint as a hard requirement: verification_override, method_hint, scope_limit and avoid. Never plan credential entry, destructive actions, or irreversible state changes.`
+const strategistInstruction = `You are a QA Test Strategist. Produce ONLY JSON test plan grounded in the app map. Cover requested features, use real observed element references and pages, include preconditions and a success goal for each test. Carry every applicable user constraint as a hard requirement: verification_override, method_hint, scope_limit and avoid. Never plan credential entry, destructive actions, or irreversible state changes.`
 
 const executorInstruction = `You are a QA Test Executor. Execute only safe, authorized QA steps with browser tools and return ONLY JSON test results. Inspect before any action. Never enter or store credentials, passwords, API keys, tokens or secrets; never submit destructive or irreversible actions. Respect every hard user constraint. After every significant action (click or navigation), inspect_page or screenshot to verify it. Capture screenshots after significant actions. A pass requires positive evidence; no error alone is inconclusive.`
 
@@ -32,7 +32,7 @@ func browserTools(adapter *browserAdapter, includeActions bool) []agent.Tool {
 	}
 	return []agent.Tool{
 		inspect,
-		{Name: "click", Description: "Click one safe, non-destructive element using a selector.", InputSchema: schema(`{"type":"object","properties":{"selector":{"type":"string","minLength":1,"maxLength":500}},"required":["selector"],"additionalProperties":false}`), Invoke: adapter.click},
+		{Name: "click", Description: "Click one inspected element by its current reference.", InputSchema: schema(`{"type":"object","properties":{"ref":{"type":"string","minLength":1,"maxLength":100}},"required":["ref"],"additionalProperties":false}`), Invoke: adapter.click},
 		{Name: "navigate", Description: "Navigate to an HTTP(S) URL without credentials.", InputSchema: schema(`{"type":"object","properties":{"url":{"type":"string","minLength":1,"maxLength":2000}},"required":["url"],"additionalProperties":false}`), Invoke: adapter.navigate},
 		screenshot,
 	}

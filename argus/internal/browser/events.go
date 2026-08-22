@@ -18,7 +18,7 @@ func FormatAction(tool string, arguments map[string]any) map[string]any {
 			persisted["url"] = "[invalid URL]"
 		}
 	case "click":
-		persisted["selector"] = boundedString(arguments["selector"], 500)
+		persisted["ref"] = boundedString(arguments["ref"], 100)
 	case "screenshot":
 		persisted["label"] = boundedString(arguments["label"], 80)
 	}

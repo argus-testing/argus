@@ -27,24 +27,18 @@ func (a *browserAdapter) inspect(ctx context.Context, _ map[string]any, _ agent.
 	if err != nil {
 		return nil, fmt.Errorf("browser: %w", err)
 	}
-	return map[string]any{"url": value.URL, "title": bounded(value.Title, 1000), "text": value.Body, "interactive": value.Interactive}, nil
+	return map[string]any{"url": value.URL, "title": bounded(value.Title, 1000), "text": value.Text, "width": value.Width, "height": value.Height, "elements": value.Elements}, nil
 }
 func (a *browserAdapter) click(ctx context.Context, values map[string]any, _ agent.ToolContext) (any, error) {
-	selector, err := requiredString(values, "selector", 500)
+	reference, err := requiredString(values, "ref", 100)
 	if err != nil {
 		return nil, err
 	}
-	if unsafeAction(selector) {
-		return nil, fmt.Errorf("destructive browser action is not allowed")
-	}
-	if err := a.session.Click(ctx, selector); err != nil {
-		return nil, fmt.Errorf("browser: %w", err)
-	}
-	page, err := a.session.Inspect(ctx)
+	result, err := a.session.Click(ctx, reference)
 	if err != nil {
 		return nil, fmt.Errorf("browser: %w", err)
 	}
-	return map[string]any{"url": page.URL, "result": "clicked"}, nil
+	return map[string]any{"url": result.URL, "result": "clicked"}, nil
 }
 func (a *browserAdapter) navigate(ctx context.Context, values map[string]any, _ agent.ToolContext) (any, error) {
 	target, err := requiredString(values, "url", 2000)
@@ -112,16 +106,6 @@ func requiredString(values map[string]any, name string, maximum int) (string, er
 	}
 	return value, nil
 }
-func unsafeAction(selector string) bool {
-	value := strings.ToLower(selector)
-	for _, word := range []string{"delete", "remove", "destroy", "purchase", "pay", "checkout", "submit"} {
-		if strings.Contains(value, word) {
-			return true
-		}
-	}
-	return false
-}
-
 func parseValidator(text string) (bool, string) {
 	var value struct {
 		Testable any    `json:"testable"`
