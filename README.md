@@ -112,7 +112,7 @@ Start Argus normally, then configure your MCP client to launch the local stdio a
 }
 ```
 
-The adapter exposes `start_test`, `get_test_run`, `list_test_runs`, `cancel_test`, and `get_test_evidence`. It connects only to the existing REST server; start Uvicorn before using these tools.
+The adapter exposes `start_test`, `get_test_run`, `list_test_runs`, `cancel_test`, and `get_test_evidence`. It connects only to the existing REST server; start Uvicorn before using these tools. The same client-specific configuration and server status are available in **Settings → MCP setup**.
 
 Argus accepts normal HTTP(S) targets, including trusted localhost and private-network apps. It rejects credentials and sensitive query parameters in target URLs, and never stores provider secrets, typed browser values, or inspected page content. The settings screen only shows whether provider configuration is present.
 
